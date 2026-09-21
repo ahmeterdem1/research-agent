@@ -1,0 +1,34 @@
+[project]
+name = "research-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "ahmeterdem1", email = "ahmetblk1035@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "aiosqlite>=0.22.1",
+    "chardet>=7.6.0",
+    "docling>=2.129.0",
+    "duckduckgo-search>=8.1.1",
+    "fastapi>=0.141.1",
+    "fastmcp>=4.0.5",
+    "litellm>=1.102.0",
+    "mcp>=2.2.0",
+    "pyalex>=0.21",
+    "pydantic>=2.13.5",
+    "pymupdf>=1.28.2",
+    "pytest>=9.1.1",
+    "python-docx>=1.2.0",
+    "python-dotenv>=1.2.3",
+    "semanticscholar>=0.12.0",
+    "uvicorn>=0.53.0",
+]
+
+[project.scripts]
+research-agent = "research_agent:main"
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13.0"]
+build-backend = "uv_build"
