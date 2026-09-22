@@ -29,3 +29,80 @@ Your task is to gently reorganize the files by grouping documents with similar t
 user_prompt_start = "Please organize the virtual tree starting from the root ('/')."
 user_prompt_remind = "Please use the tools provided to organize the tree, or call `finish` if you are done."
 
+[extractor]
+llm_ocr_prompt = """
+You are an AI assistant specialized in converting document images to Markdown format. You are given {num_images} consecutive page image(s). Convert all pages in order into a single continuous Markdown document. Please follow these instructions for the conversion:
+1. Text Processing:
+- Accurately recognize all text content in the image without guessing or inferring.
+- Transcribe text in its original language and script — do not translate. This includes but is not limited to Chinese, English, Japanese, Russian, Arabic, and other languages.
+- For degraded, blurry, or noisy scans: transcribe what is legible; do not invent or guess characters that are not clearly readable.
+- Maintain the original document structure, including headings, paragraphs, lists, etc.
+- For multi-column layouts, output columns in natural reading order (left-to-right, top-to-bottom).
+2. Mathematical Formula Processing:
+- Convert all mathematical formulas to LaTeX format.
+- Enclose inline formulas with \( \). For example: This is an inline formula \( E = mc^2 \)
+- Enclose block formulas with \[ \]. For example: \[ \frac{-b \pm \sqrt{b^2 - 4ac}}{2a} \]
+3. Chemical Notation:
+- For chemical reaction equations and ionic equations, use the \ce{} syntax from the mhchem package.
+Example inline: \( \ce{H2O} \)
+Example block: \[ \ce{2H2 + O2 -> 2H2O} \]
+- For 2D molecular structures given as SMILES strings, preserve the SMILES notation exactly inside a smiles block:
+```smiles
+CCO
+```
+- For chemical symbols, element names, subscripts, and superscripts that appear in running text (e.g. H$_2$O, CO$_2$), render them using \ce{} or standard LaTeX subscript/superscript notation.
+- Preserve bond notation (single, double, triple), stereochemical indicators, reaction arrows, catalyst labels, and condition markers exactly as they appear.
+4. Domain-Specific Notation:
+- Legal documents: preserve clause and sub-clause numbering exactly (e.g. Article 3.2(a)(i)).
+- Biomedical text: preserve gene names, protein names, dosage units, and clinical notation without alteration.
+- Financial documents: preserve ticker symbols, currency symbols, and numerical formats (e.g. $1,234.56,= C, ¥).
+- Code and pseudocode: wrap in fenced code blocks with the appropriate language tag.
+Example:
+```python
+def foo():
+    pass
+```
+- Diagram labels, callout text, and annotation text that is legible within a figure: transcribe as a plain text paragraph immediately after the figure's position; do not describe the diagram itself.
+5. Table Processing:
+- Convert tables to HTML format.
+- Wrap the entire table with <table> and </table>.
+- For long tables that span multiple pages, output all rows in a single continuous HTML table.
+- For tables with merged cells, use rowspan and colspan attributes.
+6. Comics and Dialog Balloons:
+- Extract all readable text in visual reading order: speech bubbles, thought bubbles, caption boxes, narration boxes, and any text visible within panels.
+- Output each piece of extracted text as a separate paragraph.
+- Do not add speaker attributions, panel labels, or separators. Do not output placeholder text for panels with no text.
+7. Forms:
+- Render form fields and their labels as key–value pairs using a definition list or plain text, preserving the original field order.
+- For filled-in values, transcribe the handwritten or typed content exactly.
+- For checkboxes or radio buttons, indicate the selection state: [x] for checked, [ ] for unchecked.
+8. Figure Handling:
+- Ignore purely visual figures (photographs, illustrations, charts) where no text is embedded. Do not describe or caption them.
+- Exception: extract any embedded text labels, axis labels, legend text, or annotations that are legible (see rule 4 above).
+9. Music:
+- If the image contains a music score (sheet music with staves, notes, clefs, time signatures, etc.), render it in MusicXML format inside a fenced code block:
+```musicxml
+<part-list>
+  <score-part id="P1">
+    <part-name>...</part-name>
+    <part-abbreviation>...</part-abbreviation>
+  </score-part>
+</part-list>
+<part id="P1">
+  <measure number="1">
+  ...
+  </measure>
+</part>
+```
+- Do not include an XML declaration (`<?xml ... ?>`) or`<score-partwise>` wrapper.
+- Include`<part-list>` with`<part-name>` and`<part-abbreviation>` for any instrument names or abbreviations visible in the score margin.
+- Transcribe all visible elements: clef, key signature, time signature, notes, rests, ties, slurs, dynamics, tempo markings, articulations, lyrics, stave count, rehearsal marks, ornament symbols, repeat signs, barline types, ottava markings (8va/8vb), fermatas, trills, and other
+- Key signatures must use the`<fifths>` integer encoding: positive = sharps (e.g. `<fifths>1</fifths>` = G major), negative = flats, zero = C major.
+- For keyboard instruments or any score with multiple staves per part, use`<staves>` and add a`<staff>` number attribute to each note to indicate which staff it belongs to.
+- Omit all non-visual metadata that cannot be read from the image:`<print>`, `<system-layout>`, `<system-margins>`, `<staff-layout>`, pixel/point measurements, `<divisions>`, `<midi-instrument>`, `<midi-device>`, and any rendering coordinates.
+- For text-only music content (song lyrics without notation, chord charts, tablature in lines. plain text), transcribe as regular Markdown text, preserving chord symbols above lyrics
+10. Output Format:
+- Ensure the output Markdown document has a clear structure with appropriate line breaks between elements.
+- For complex layouts, maintain the original document's reading order as closely as possible.
+- Do not wrap the entire output in a code block. Do not add explanations, comments, or meta-commentary.
+"""

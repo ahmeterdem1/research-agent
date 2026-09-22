@@ -75,8 +75,14 @@ def extract_pdf_docling(file_path: Path) -> ExtractedContent:
 
 def extract_pdf_llm(file_path: Path) -> ExtractedContent:
     """Extracts PDF text using a Multimodal LLM (Vision). Converts pages to images."""
+    from config.prompts import get_prompts
+    
     print(f"  [LLM OCR] Extracting {file_path.name} via LLM Vision...")
     text_parts = []
+    
+    prompts = get_prompts()
+    prompt_template = prompts["extractor"]["llm_ocr_prompt"]
+    prompt = prompt_template.format(num_images=1)
     
     try:
         # Open PDF and render pages to images
@@ -87,13 +93,6 @@ def extract_pdf_llm(file_path: Path) -> ExtractedContent:
             pix = page.get_pixmap(matrix=fitz.Matrix(2, 2)) # 2x resolution
             img_bytes = pix.tobytes("jpeg")
             img_b64 = base64.b64encode(img_bytes).decode("utf-8")
-            
-            prompt = (
-                "You are a professional document transcription API. "
-                "Please transcribe this page perfectly into Markdown format. "
-                "Include mathematical equations as LaTeX. Do not add conversational filler, "
-                "only output the transcribed Markdown."
-            )
             
             # Use the summarization model or a specific vision model from settings
             model = getattr(settings, "VISION_MODEL", settings.DEFAULT_SUMMARIZATION_MODEL)
