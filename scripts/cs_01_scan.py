@@ -8,6 +8,12 @@ from config import settings
 from src.cold_start.scanner import scan_directory
 
 def run(library_path: str, book_threshold: int):
+    out_path = settings.CACHE_DIR / "cs_01_scan.json"
+
+    if Path(out_path).exists():
+        print(f"Scan file exists: {out_path}")
+        return
+
     print(f"--- Stage 1: Scanning {library_path} ---")
     files_info = scan_directory(library_path, book_threshold)
     
@@ -22,7 +28,7 @@ def run(library_path: str, book_threshold: int):
             "is_splittable": f.is_splittable
         })
         
-    out_path = settings.CACHE_DIR / "cs_01_scan.json"
+    
     out_path.write_text(json.dumps(output, indent=2), encoding="utf-8")
     print(f"Scanned {len(output)} files. Wrote intermediary to {out_path}")
 
@@ -30,6 +36,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--library-path", type=str, default=settings.LIBRARY_ROOT_PATH)
     parser.add_argument("--book-threshold", type=int, default=settings.BOOK_PAGE_THRESHOLD)
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing scan file")
     args = parser.parse_args()
     if not args.library_path:
         print("Missing library path.")

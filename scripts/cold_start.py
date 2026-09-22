@@ -36,8 +36,10 @@ def main():
         
     print(f"Starting pipeline for: {lib_path}")
     
-    # 1. Scan
-    run_stage("cs_01_scan.py", ["--library-path", lib_path, "--book-threshold", str(args.book_threshold)])
+    scan_args = ["--library-path", lib_path, "--book-threshold", str(args.book_threshold)]
+    if args.overwrite:
+        scan_args.append("--overwrite")
+    run_stage("cs_01_scan.py", scan_args)
     
     # 2. Extract
     extract_args = ["--book-threshold", str(args.book_threshold)]

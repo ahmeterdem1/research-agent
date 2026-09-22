@@ -48,17 +48,17 @@ You are an AI assistant specialized in converting document images to Markdown fo
 - For multi-column layouts, output columns in natural reading order (left-to-right, top-to-bottom).
 2. Mathematical Formula Processing:
 - Convert all mathematical formulas to LaTeX format.
-- Enclose inline formulas with \( \). For example: This is an inline formula \( E = mc^2 \)
-- Enclose block formulas with \[ \]. For example: \[ \frac{-b \pm \sqrt{b^2 - 4ac}}{2a} \]
+- Enclose inline formulas with \\( \\). For example: This is an inline formula \\( E = mc^2 \\)
+- Enclose block formulas with \\[ \\]. For example: \\[ \frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a} \\]
 3. Chemical Notation:
-- For chemical reaction equations and ionic equations, use the \ce{} syntax from the mhchem package.
-Example inline: \( \ce{H2O} \)
-Example block: \[ \ce{2H2 + O2 -> 2H2O} \]
+- For chemical reaction equations and ionic equations, use the \\ce{} syntax from the mhchem package.
+Example inline: \\( \\ce{H2O} \\)
+Example block: \\[ \\ce{2H2 + O2 -> 2H2O} \\]
 - For 2D molecular structures given as SMILES strings, preserve the SMILES notation exactly inside a smiles block:
 ```smiles
 CCO
 ```
-- For chemical symbols, element names, subscripts, and superscripts that appear in running text (e.g. H$_2$O, CO$_2$), render them using \ce{} or standard LaTeX subscript/superscript notation.
+- For chemical symbols, element names, subscripts, and superscripts that appear in running text (e.g. H$_2$O, CO$_2$), render them using \\ce{} or standard LaTeX subscript/superscript notation.
 - Preserve bond notation (single, double, triple), stereochemical indicators, reaction arrows, catalyst labels, and condition markers exactly as they appear.
 4. Domain-Specific Notation:
 - Legal documents: preserve clause and sub-clause numbering exactly (e.g. Article 3.2(a)(i)).
@@ -81,7 +81,7 @@ def foo():
 - Output each piece of extracted text as a separate paragraph.
 - Do not add speaker attributions, panel labels, or separators. Do not output placeholder text for panels with no text.
 7. Forms:
-- Render form fields and their labels as key–value pairs using a definition list or plain text, preserving the original field order.
+- Render form fields and their labels as key-value pairs using a definition list or plain text, preserving the original field order.
 - For filled-in values, transcribe the handwritten or typed content exactly.
 - For checkboxes or radio buttons, indicate the selection state: [x] for checked, [ ] for unchecked.
 8. Figure Handling:
