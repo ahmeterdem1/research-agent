@@ -21,7 +21,7 @@ def summarize_text(text: str) -> str:
     cache_file = settings.CACHE_DIR / f"{text_hash}.json"
     
     if cache_file.exists():
-        return json.loads(cache_file.read_text())["summary"]
+        return json.loads(cache_file.read_text(encoding="utf-8"))["summary"]
 
     prompts = get_prompts()
     prompt_template = prompts["summarizer"]["document_prompt"]
@@ -35,7 +35,7 @@ def summarize_text(text: str) -> str:
         summary = response.choices[0].message.content.strip()
         
         # Cache it
-        cache_file.write_text(json.dumps({"summary": summary}))
+        cache_file.write_text(json.dumps({"summary": summary}), encoding="utf-8")
         return summary
     except Exception as e:
         print(f"Summarization error: {e}")

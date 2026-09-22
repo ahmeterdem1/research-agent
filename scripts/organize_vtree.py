@@ -20,7 +20,7 @@ def run_organize(args):
         
     print(f"Loading virtual tree from {vtree_path}...")
     try:
-        vtree = json.loads(vtree_path.read_text())
+        vtree = json.loads(vtree_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         print(f"Error reading JSON from {vtree_path}: {e}")
         sys.exit(1)
@@ -33,7 +33,7 @@ def run_organize(args):
         print("Organization failed or skipped. The virtual tree was not modified.")
     else:
         print(f"Organization successful! Saving updated tree to {vtree_path}...")
-        vtree_path.write_text(json.dumps(organized_vtree, indent=2))
+        vtree_path.write_text(json.dumps(organized_vtree, indent=2), encoding="utf-8")
         print("Done.")
 
 if __name__ == "__main__":

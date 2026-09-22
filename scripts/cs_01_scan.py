@@ -23,7 +23,7 @@ def run(library_path: str, book_threshold: int):
         })
         
     out_path = settings.CACHE_DIR / "cs_01_scan.json"
-    out_path.write_text(json.dumps(output, indent=2))
+    out_path.write_text(json.dumps(output, indent=2), encoding="utf-8")
     print(f"Scanned {len(output)} files. Wrote intermediary to {out_path}")
 
 if __name__ == "__main__":

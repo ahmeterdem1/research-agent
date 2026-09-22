@@ -30,12 +30,12 @@ def run(book_threshold: int, overwrite: bool = False):
         sys.exit(1)
         
     print(f"--- Stage 2: Extracting Text ---")
-    data = json.loads(in_path.read_text())
+    data = json.loads(in_path.read_text(encoding="utf-8"))
     
     existing_data = {}
     if settings.VTREE_PATH.exists() and not overwrite:
         try:
-            old_tree = json.loads(settings.VTREE_PATH.read_text())
+            old_tree = json.loads(settings.VTREE_PATH.read_text(encoding="utf-8"))
             if "root" in old_tree:
                 existing_data = extract_files_from_vtree(old_tree["root"])
                 print(f"Loaded {len(existing_data)} already processed files from vtree.")
@@ -85,6 +85,7 @@ def run(book_threshold: int, overwrite: bool = False):
                 
             book_children = []
             for sec_idx, sec in enumerate(split_res.sections):
+                print(f"    Extracting section {sec_idx+1}/{len(split_res.sections)}: {sec.name}...")
                 content = extract_content(sec.real_path)
                 if not content or not content.text.strip():
                     continue
@@ -92,7 +93,7 @@ def run(book_threshold: int, overwrite: bool = False):
                 text_hash = get_text_hash(content.text)
                 text_path = TEXT_CACHE_DIR / f"{text_hash}.md"
                 if not text_path.exists():
-                    text_path.write_text(content.text)
+                    text_path.write_text(content.text, encoding="utf-8")
                     
                 book_children.append({
                     "name": sec.name,
@@ -121,7 +122,7 @@ def run(book_threshold: int, overwrite: bool = False):
             text_hash = get_text_hash(content.text)
             text_path = TEXT_CACHE_DIR / f"{text_hash}.md"
             if not text_path.exists():
-                text_path.write_text(content.text)
+                text_path.write_text(content.text, encoding="utf-8")
                 
             extracted_docs.append({
                 "name": finfo.name,
@@ -133,7 +134,7 @@ def run(book_threshold: int, overwrite: bool = False):
             })
             
     out_path = settings.CACHE_DIR / "cs_02_extract.json"
-    out_path.write_text(json.dumps(extracted_docs, indent=2))
+    out_path.write_text(json.dumps(extracted_docs, indent=2), encoding="utf-8")
     print(f"Extraction complete. Wrote {len(extracted_docs)} nodes to {out_path}")
 
 if __name__ == "__main__":

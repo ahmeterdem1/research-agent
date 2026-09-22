@@ -19,7 +19,7 @@ class VTreeStore:
             if not self.filepath.exists():
                 raise FileNotFoundError(f"VTree file not found at {self.filepath}")
                 
-            data = json.loads(self.filepath.read_text())
+            data = json.loads(self.filepath.read_text(encoding="utf-8"))
             self._cached_tree = VTree.model_validate(data)
             return self._cached_tree
 
@@ -34,7 +34,7 @@ class VTreeStore:
             
             # Atomic write pattern: write to .tmp then rename
             temp_path = self.filepath.with_suffix('.json.tmp')
-            temp_path.write_text(vtree.model_dump_json(indent=2))
+            temp_path.write_text(vtree.model_dump_json(indent=2), encoding="utf-8")
             temp_path.replace(self.filepath)
 
     def load_as_dict(self) -> dict:
@@ -42,7 +42,7 @@ class VTreeStore:
         with self._lock:
             if not self.filepath.exists():
                 raise FileNotFoundError(f"VTree file not found at {self.filepath}")
-            return json.loads(self.filepath.read_text())
+            return json.loads(self.filepath.read_text(encoding="utf-8"))
             
     def save_dict(self, vtree_dict: dict):
         """Save directly from dict, bypassing explicit Pydantic instance creation (still validated)."""

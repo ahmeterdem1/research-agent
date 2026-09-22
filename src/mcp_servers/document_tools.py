@@ -92,7 +92,7 @@ def get_document(virtual_path: str) -> str:
         return f"Error: Text content not found for {virtual_path}. It may not have been extracted properly during cold start."
         
     try:
-        content = Path(text_path).read_text()
+        content = Path(text_path).read_text(encoding="utf-8")
         return content
     except Exception as e:
         return f"Error reading document text: {e}"

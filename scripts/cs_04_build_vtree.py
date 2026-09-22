@@ -14,11 +14,11 @@ def run(library_path: str):
         sys.exit(1)
         
     print(f"--- Stage 4: Building Initial VTree ---")
-    data = json.loads(in_path.read_text())
+    data = json.loads(in_path.read_text(encoding="utf-8"))
     
     vtree = build_initial_vtree(data, Path(library_path))
     
-    settings.VTREE_PATH.write_text(json.dumps(vtree, indent=2))
+    settings.VTREE_PATH.write_text(json.dumps(vtree, indent=2), encoding="utf-8")
     print(f"Initial VTree built successfully. Wrote to {settings.VTREE_PATH}")
 
 if __name__ == "__main__":
