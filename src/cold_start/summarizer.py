@@ -59,3 +59,21 @@ def summarize_directory(children_summaries: list[str]) -> str:
         print(f"Directory summarization error: {e}")
         return "Directory summary generation failed."
 
+def summarize_book(children_summaries: list[str]) -> str:
+    if not children_summaries:
+        return "Empty book."
+        
+    prompts = get_prompts()
+    prompt_template = prompts["summarizer"]["book_prompt"]
+    prompt = prompt_template.format(summaries=chr(10).join(children_summaries))
+    
+    try:
+        response = completion(
+            model=settings.DEFAULT_SUMMARIZATION_MODEL,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"Book summarization error: {e}")
+        return "Book summary generation failed."
+

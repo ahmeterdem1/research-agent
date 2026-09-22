@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent))
 from config import settings
-from src.cold_start.summarizer import summarize_text
+from src.cold_start.summarizer import summarize_text, summarize_book
 
 def run():
     in_path = settings.CACHE_DIR / "cs_02_extract.json"
@@ -17,12 +17,18 @@ def run():
     
     for item in data:
         if item.get("type") == "book":
-            item["summary"] = "A book containing multiple sections."
+            child_summaries = []
             for child in item.get("children", []):
                 text_path = Path(child["text_path"])
                 print(f"Summarizing {child['name']}...")
                 text = text_path.read_text(encoding="utf-8")
-                child["summary"] = summarize_text(text)
+                child_summary = summarize_text(text)
+                child["summary"] = child_summary
+                child_summaries.append(f"{child['name']}: {child_summary}")
+                
+            print(f"Summarizing book {item['name']} from its sections...")
+            book_summary = summarize_book(child_summaries)
+            item["summary"] = f"A book containing multiple sections. {book_summary}"
         else:
             text_path = Path(item["text_path"])
             print(f"Summarizing {item['name']}...")

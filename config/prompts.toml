@@ -14,6 +14,14 @@ Summaries:
 {summaries}
 """
 
+book_prompt = """
+Based on the following summaries of the chapters/sections of this book, provide a 2-3 sentence overview of what this entire book covers.
+
+Section Summaries:
+{summaries}
+"""
+
+
 [vtree_organizer]
 system_prompt = """
 You are an expert librarian agent organizing a research directory.
