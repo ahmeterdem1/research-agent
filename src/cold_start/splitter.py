@@ -73,15 +73,53 @@ def split_book(file_info: FileInfo, limit: int = 30) -> SplitResult:
 
             final_chunks = process_range(1, total_pages, file_info.name, toc, 1)
             
+            # --- MERGING LOGIC ---
+            # Merge adjacent chunks as long as their total page count is <= limit
+            merged_chunks = []
+            current_start = None
+            current_end = None
+            current_title_parts = []
+            current_pages = 0
+            
+            for start_p, end_p, title in final_chunks:
+                pages = end_p - start_p + 1
+                
+                if current_pages + pages <= limit:
+                    if current_start is None:
+                        current_start = start_p
+                    current_end = end_p
+                    current_title_parts.append(title)
+                    current_pages += pages
+                else:
+                    if current_start is not None:
+                        if len(current_title_parts) == 1:
+                            merged_title = current_title_parts[0]
+                        else:
+                            merged_title = f"{current_title_parts[0]} to {current_title_parts[-1]}"
+                        merged_chunks.append((current_start, current_end, merged_title))
+                    
+                    current_start = start_p
+                    current_end = end_p
+                    current_title_parts = [title]
+                    current_pages = pages
+                    
+            if current_start is not None:
+                if len(current_title_parts) == 1:
+                    merged_title = current_title_parts[0]
+                else:
+                    merged_title = f"{current_title_parts[0]} to {current_title_parts[-1]}"
+                merged_chunks.append((current_start, current_end, merged_title))
+            # ---------------------
+            
             # Now we have a list of (start_page, end_page, title)
             # We save each as a new PDF
             sections = []
             book_cache_dir = settings.CACHE_DIR / "split_books" / file_info.name
             book_cache_dir.mkdir(parents=True, exist_ok=True)
             
-            print(f"Splitting {file_info.name} into {len(final_chunks)} sections with page counts {[e - s + 1 for s, e, _ in final_chunks]}")
+            print(f"Splitting {file_info.name} into {len(merged_chunks)} sections with page counts {[e - s + 1 for s, e, _ in merged_chunks]}")
             
-            for idx, (start_p, end_p, title) in enumerate(final_chunks):
+            for idx, (start_p, end_p, title) in enumerate(merged_chunks):
                 sec_doc = fitz.open()
                 sec_doc.insert_pdf(doc, from_page=start_p-1, to_page=end_p-1)
                 
