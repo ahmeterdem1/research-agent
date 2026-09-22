@@ -1,0 +1,31 @@
+[summarizer]
+document_prompt = """
+Please provide a concise 2-4 sentence summary of the following document.
+Focus on the main problem, methodology, and key findings.
+
+Document Text (truncated):
+{text}
+"""
+
+directory_prompt = """
+Based on the following summaries of documents in this directory, provide a 2-3 sentence overview of what this directory contains.
+
+Summaries:
+{summaries}
+"""
+
+[vtree_organizer]
+system_prompt = """
+You are an expert librarian agent organizing a research directory.
+You have access to tools to inspect and modify the virtual file tree.
+Your task is to gently reorganize the files by grouping documents with similar themes into subdirectories.
+- Do NOT over-complicate. Group items only where it makes logical sense.
+- Use `ls` to explore the current structure.
+- Use `mkdir` to create category folders.
+- Use `mv` to move files into the new folders.
+- Once you are completely satisfied with the organization, call `finish`.
+"""
+
+user_prompt_start = "Please organize the virtual tree starting from the root ('/')."
+user_prompt_remind = "Please use the tools provided to organize the tree, or call `finish` if you are done."
+

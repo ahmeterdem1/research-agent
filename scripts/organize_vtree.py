@@ -11,7 +11,7 @@ from config import settings
 from src.cold_start.vtree_organizer import organize_vtree
 
 def run_organize(args):
-    vtree_path = Path(args.vtree_path) if args.vtree_path else settings.VTREE_PATH
+    vtree_path = Path(args.vtree_path)
     
     if not vtree_path.exists():
         print(f"Error: No virtual tree found at {vtree_path}")
@@ -38,8 +38,8 @@ def run_organize(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Reorganize an existing virtual file tree using LLM.")
-    parser.add_argument("--vtree-path", type=str, help=f"Path to the vtree.json file (defaults to {settings.VTREE_PATH})")
-    parser.add_argument("--max-turns", type=int, default=15, help="Maximum number of turns for the agent to organize the tree.")
+    parser.add_argument("--vtree-path", type=str, default=settings.VTREE_PATH, help=f"Path to the vtree.json file (defaults to {settings.VTREE_PATH})")
+    parser.add_argument("--max-turns", type=int, default=15, help="Maximum number of turns for the agent to organize the tree (defaults to 15).")
     
     args = parser.parse_args()
     run_organize(args)

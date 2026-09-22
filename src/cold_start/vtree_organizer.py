@@ -38,6 +38,7 @@ def organize_vtree(vtree: dict, max_turns: int = 15) -> dict:
     import copy
     from src.vtree.operations import VTreeManager
     from src.mcp_servers.vtree_organizer_tools import set_active_manager, ls, mkdir, mv, finish, get_tool_schemas
+    from config.prompts import get_prompts
     
     # Create a deep copy so we don't mutate the original dict in case of failure
     organized_vtree = copy.deepcopy(vtree)
@@ -45,24 +46,16 @@ def organize_vtree(vtree: dict, max_turns: int = 15) -> dict:
     set_active_manager(manager)
     
     tools = get_tool_schemas()
+    prompts = get_prompts()["vtree_organizer"]
 
     messages = [
         {
             "role": "system",
-            "content": (
-                "You are an expert librarian agent organizing a research directory.\n"
-                "You have access to tools to inspect and modify the virtual file tree.\n"
-                "Your task is to gently reorganize the files by grouping documents with similar themes into subdirectories.\n"
-                "- Do NOT over-complicate. Group items only where it makes logical sense.\n"
-                "- Use `ls` to explore the current structure.\n"
-                "- Use `mkdir` to create category folders.\n"
-                "- Use `mv` to move files into the new folders.\n"
-                "- Once you are completely satisfied with the organization, call `finish`."
-            )
+            "content": prompts["system_prompt"]
         },
         {
             "role": "user",
-            "content": "Please organize the virtual tree starting from the root ('/')."
+            "content": prompts["user_prompt_start"]
         }
     ]
 
@@ -86,7 +79,7 @@ def organize_vtree(vtree: dict, max_turns: int = 15) -> dict:
                 print("  [Agent] No tool call detected. Reminding agent to use tools or finish.")
                 messages.append({
                     "role": "user",
-                    "content": "Please use the tools provided to organize the tree, or call `finish` if you are done."
+                    "content": prompts["user_prompt_remind"]
                 })
                 continue
                 
