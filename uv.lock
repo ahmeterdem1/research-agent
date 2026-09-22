@@ -3372,6 +3372,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
+    { name = "beautifulsoup4" },
     { name = "chardet" },
     { name = "docling" },
     { name = "duckduckgo-search" },
@@ -3400,6 +3401,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.22.1" },
+    { name = "beautifulsoup4", specifier = ">=4.15.0" },
     { name = "chardet", specifier = ">=7.6.0" },
     { name = "docling", specifier = ">=2.129.0" },
     { name = "duckduckgo-search", specifier = ">=8.1.1" },
