@@ -144,30 +144,37 @@ class VTreeManager:
         
         return f"Successfully moved '{src}' to '{dest}'."
 
-    def check_local(self, title_or_doi: str) -> dict | None:
+    def search_library(self, query: str) -> list[dict]:
         """
-        Check if a paper is already stored locally by title or DOI.
-        Returns the node dict if found, otherwise None.
+        Search the entire library for nodes matching the query in their name, doi, or summary.
+        Returns a list of matching node dicts.
         """
+        results = []
+        q = query.lower()
+        
         def search(node):
             if not isinstance(node, dict):
-                return None
+                return
                 
             ntype = node.get("type")
-            if ntype in ("document", "book"):
-                if title_or_doi.lower() in node.get("name", "").lower():
-                    return node
-                if "doi" in node and node["doi"] and title_or_doi.lower() == node["doi"].lower():
-                    return node
+            if ntype in ("document", "book", "directory"):
+                match = False
+                if q in node.get("name", "").lower():
+                    match = True
+                elif "doi" in node and node.get("doi") and q in node["doi"].lower():
+                    match = True
+                elif q in node.get("summary", "").lower():
+                    match = True
+                    
+                if match:
+                    results.append(node)
                     
             if "children" in node:
                 for child in node["children"]:
-                    found = search(child)
-                    if found:
-                        return found
-            return None
+                    search(child)
             
-        return search(self.vtree.get("root"))
+        search(self.vtree.get("root"))
+        return results
 
     def update_ancestor_summaries(self, vpath: str, new_summary: str):
         """

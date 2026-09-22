@@ -9,7 +9,6 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from config import settings
 from src.vtree.store import VTreeStore
 from src.vtree.operations import VTreeManager
-from src.cold_start.extractor import extract_content
 
 mcp = FastMCP("DocumentTools")
 
@@ -107,20 +106,32 @@ def get_documents(virtual_paths: List[str]) -> str:
     return "\n".join(results)
 
 @mcp.tool()
-def check_paper_local(title: str, doi: Optional[str] = None) -> str:
-    """Checks if a paper is already stored locally by title or DOI."""
-    manager = get_manager()
+def search_library(query: str) -> str:
+    """
+    Instantly searches the entire local virtual library for documents, books, or directories 
+    matching the given keyword query. The search is case-insensitive and matches against 
+    the file name, DOI, and the LLM-generated summaries of every item.
     
-    # Try DOI first if provided
-    if doi:
-        node = manager.check_local(doi)
-        if node:
-            return f"Found locally at virtual path: {node.get('virtual_path')}"
-            
-    # Fallback to title
-    node = manager.check_local(title)
-    if node:
-        return f"Found locally at virtual path: {node.get('virtual_path')}"
+    Use this tool FIRST before deciding to fetch a paper from the web. By searching 
+    for keywords related to the paper (e.g., 'attention is all you need transformer'), 
+    you can discover if the paper was already ingested under a different file name, 
+    thus preventing duplicate downloads.
+    
+    Returns a formatted list of matches containing their virtual path, type, and summary.
+    """
+    manager = get_manager()
+    results = manager.search_library(query)
+    
+    if not results:
+        return f"No local documents found matching query: '{query}'"
         
-    return "Not found locally."
+    formatted = []
+    for r in results:
+        vpath = r.get("virtual_path", "unknown")
+        rtype = r.get("type", "unknown")
+        name = r.get("name", "unknown")
+        summary = r.get("summary", "")
+        formatted.append(f"Match Found [{rtype}]: '{name}'\nPath: {vpath}\nSummary: {summary}\n---")
+        
+    return "\n".join(formatted)
 

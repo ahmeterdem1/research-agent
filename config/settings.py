@@ -21,12 +21,13 @@ VTREE_PATH = DATA_DIR / "vtree.json"
 DB_PATH = DATA_DIR / "research_agent.db"
 
 # Model Configuration
-DEFAULT_SUMMARIZATION_MODEL = "openrouter/deepseek/deepseek-chat"
+DEFAULT_AGENT_MODEL = os.getenv("DEFAULT_AGENT_MODEL", "openrouter/deepseek/deepseek-chat")
+DEFAULT_SUMMARIZATION_MODEL = os.getenv("DEFAULT_SUMMARIZATION_MODEL", "openrouter/deepseek/deepseek-chat")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
 # Extraction Configuration
 EXTRACTOR_MODE = os.getenv("EXTRACTOR_MODE", "docling") # 'docling' or 'llm'
-VISION_MODEL = os.getenv("VISION_MODEL", "openrouter/google/gemini-1.5-pro")
+VISION_MODEL = os.getenv("VISION_MODEL", "openrouter/google/gemini-2.5-flash")
 MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", 5))
 
 # Application Thresholds
