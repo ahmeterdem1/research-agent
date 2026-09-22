@@ -84,45 +84,41 @@ def extract_pdf_llm(file_path: Path) -> ExtractedContent:
     
     prompts = get_prompts()
     prompt_template = prompts["extractor"]["llm_ocr_prompt"]
-    prompt = prompt_template.format(num_images=1)
+    prompt = prompt_template.replace("{num_images}", "1")
     
-    try:
-        # Open PDF and render pages to images
-        doc = fitz.open(file_path)
-        for page_num in range(doc.page_count):
-            print(f"    -> Processing page {page_num + 1}/{doc.page_count}")
-            page = doc.load_page(page_num)
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2)) # 2x resolution
-            img_bytes = pix.tobytes("jpeg")
-            img_b64 = base64.b64encode(img_bytes).decode("utf-8")
-            
-            # Use the summarization model or a specific vision model from settings
-            model = getattr(settings, "VISION_MODEL", settings.DEFAULT_SUMMARIZATION_MODEL)
-            
-            response = completion(
-                model=model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
-                        ]
-                    }
-                ]
-            )
-            page_text = response.choices[0].message.content.strip()
-            text_parts.append(page_text)
-            
-        doc.close()
+    # Open PDF and render pages to images
+    doc = fitz.open(file_path)
+    for page_num in range(doc.page_count):
+        print(f"    -> Processing page {page_num + 1}/{doc.page_count}")
+        page = doc.load_page(page_num)
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2)) # 2x resolution
+        img_bytes = pix.tobytes("jpeg")
+        img_b64 = base64.b64encode(img_bytes).decode("utf-8")
         
-        full_text = "\n\n".join(text_parts)
-        headings = [line.strip('# ').strip() for line in full_text.split('\n') if line.startswith('#')]
-        return ExtractedContent(text=full_text, headings=headings)
+        # Use the summarization model or a specific vision model from settings
+        model = getattr(settings, "VISION_MODEL", settings.DEFAULT_SUMMARIZATION_MODEL)
         
-    except Exception as e:
-        print(f"  [LLM OCR] Failed: {e}")
-        return ExtractedContent(text=f"LLM Extraction failed: {e}", headings=[])
+        response = completion(
+            model=model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
+                    ]
+                }
+            ]
+        )
+        page_text = response.choices[0].message.content.strip()
+        text_parts.append(page_text)
+        
+    doc.close()
+
+    # TODO: This is sketchy, what if sentences or words are split by pages? We should perform a better merge.
+    full_text = "\n\n".join(text_parts)
+    headings = [line.strip('# ').strip() for line in full_text.split('\n') if line.startswith('#')]
+    return ExtractedContent(text=full_text, headings=headings)
 
 def extract_text(file_path: Path) -> ExtractedContent:
     raw_data = file_path.read_bytes()

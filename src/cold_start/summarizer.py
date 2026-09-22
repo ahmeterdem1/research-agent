@@ -29,19 +29,15 @@ def summarize_text(text: str) -> str:
     prompt_template = prompts["summarizer"]["document_prompt"]
     prompt = prompt_template.format(text=text[:15000])
     
-    try:
-        response = completion(
-            model=settings.DEFAULT_SUMMARIZATION_MODEL,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        summary = response.choices[0].message.content.strip()
-        
-        # Cache it
-        cache_file.write_text(json.dumps({"summary": summary}), encoding="utf-8")
-        return summary
-    except Exception as e:
-        print(f"Summarization error: {e}")
-        return "Summary generation failed."
+    response = completion(
+        model=settings.DEFAULT_SUMMARIZATION_MODEL,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    summary = response.choices[0].message.content.strip()
+    
+    # Cache it
+    cache_file.write_text(json.dumps({"summary": summary}), encoding="utf-8")
+    return summary
 
 @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=10))
 def summarize_directory(children_summaries: list[str]) -> str:
@@ -52,15 +48,11 @@ def summarize_directory(children_summaries: list[str]) -> str:
     prompt_template = prompts["summarizer"]["directory_prompt"]
     prompt = prompt_template.format(summaries=chr(10).join(children_summaries))
     
-    try:
-        response = completion(
-            model=settings.DEFAULT_SUMMARIZATION_MODEL,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        print(f"Directory summarization error: {e}")
-        return "Directory summary generation failed."
+    response = completion(
+        model=settings.DEFAULT_SUMMARIZATION_MODEL,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content.strip()
 
 @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=10))
 def summarize_book(children_summaries: list[str]) -> str:
@@ -71,13 +63,9 @@ def summarize_book(children_summaries: list[str]) -> str:
     prompt_template = prompts["summarizer"]["book_prompt"]
     prompt = prompt_template.format(summaries=chr(10).join(children_summaries))
     
-    try:
-        response = completion(
-            model=settings.DEFAULT_SUMMARIZATION_MODEL,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        print(f"Book summarization error: {e}")
-        return "Book summary generation failed."
+    response = completion(
+        model=settings.DEFAULT_SUMMARIZATION_MODEL,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content.strip()
 

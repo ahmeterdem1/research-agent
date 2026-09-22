@@ -38,13 +38,21 @@ def run(overwrite: bool = False):
         text_path = Path(node["text_path"])
         print(f"Summarizing leaf node: {node['name']}...")
         text = robust_read(text_path)
-        node["summary"] = summarize_text(text)
+        try:
+            node["summary"] = summarize_text(text)
+        except Exception as e:
+            print(f"  Failed to summarize {node['name']}: {e}")
+            node["summary"] = "Summary generation failed."
         
     def process_book(node):
         print(f"Summarizing book {node['name']} from its sections...")
-        child_summaries = [f"{c['name']}: {c['summary']}" for c in node.get("children", [])]
-        book_summary = summarize_book(child_summaries)
-        node["summary"] = f"A book containing multiple sections. {book_summary}"
+        child_summaries = [f"{c['name']}: {c.get('summary', 'No summary')}" for c in node.get("children", [])]
+        try:
+            book_summary = summarize_book(child_summaries)
+            node["summary"] = f"A book containing multiple sections. {book_summary}"
+        except Exception as e:
+            print(f"  Failed to summarize book {node['name']}: {e}")
+            node["summary"] = "A book containing multiple sections. Summary generation failed."
 
     # Pass 1: Summarize all leaves (documents and book children) in parallel
     leaves = []
