@@ -24,6 +24,10 @@ DB_PATH = DATA_DIR / "research_agent.db"
 DEFAULT_SUMMARIZATION_MODEL = "openrouter/deepseek/deepseek-chat"
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
+# Extraction Configuration
+EXTRACTOR_MODE = os.getenv("EXTRACTOR_MODE", "docling") # 'docling' or 'llm'
+VISION_MODEL = os.getenv("VISION_MODEL", "openrouter/google/gemini-1.5-pro")
+
 # Application Thresholds
 BOOK_PAGE_THRESHOLD = 30
 
