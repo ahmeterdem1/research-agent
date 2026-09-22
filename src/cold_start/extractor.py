@@ -5,6 +5,7 @@ from docx import Document as DocxDocument
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.pipeline_options import PdfPipelineOptions, AcceleratorOptions, AcceleratorDevice
 from litellm import completion
+from tenacity import retry, stop_after_attempt, wait_exponential
 import fitz
 import base64
 import os
@@ -73,6 +74,7 @@ def extract_pdf_docling(file_path: Path) -> ExtractedContent:
     
     return ExtractedContent(text=text, headings=headings)
 
+@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=10))
 def extract_pdf_llm(file_path: Path) -> ExtractedContent:
     """Extracts PDF text using a Multimodal LLM (Vision). Converts pages to images."""
     from config.prompts import get_prompts

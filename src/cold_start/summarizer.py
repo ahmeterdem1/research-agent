@@ -2,6 +2,7 @@ import hashlib
 import json
 from pathlib import Path
 from litellm import completion
+from tenacity import retry, stop_after_attempt, wait_exponential
 import sys
 import os
 
@@ -12,6 +13,7 @@ from config.prompts import get_prompts
 def get_text_hash(text: str) -> str:
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
+@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=10))
 def summarize_text(text: str) -> str:
     """
     Summarizes the text using the configured LLM.
@@ -41,6 +43,7 @@ def summarize_text(text: str) -> str:
         print(f"Summarization error: {e}")
         return "Summary generation failed."
 
+@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=10))
 def summarize_directory(children_summaries: list[str]) -> str:
     if not children_summaries:
         return "Empty directory."
@@ -59,6 +62,7 @@ def summarize_directory(children_summaries: list[str]) -> str:
         print(f"Directory summarization error: {e}")
         return "Directory summary generation failed."
 
+@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=10))
 def summarize_book(children_summaries: list[str]) -> str:
     if not children_summaries:
         return "Empty book."

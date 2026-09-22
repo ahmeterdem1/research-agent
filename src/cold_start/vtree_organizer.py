@@ -1,5 +1,6 @@
 import json
 from litellm import completion
+from tenacity import retry, stop_after_attempt, wait_exponential
 import sys
 from pathlib import Path
 
@@ -29,6 +30,15 @@ def extract_all_files(node) -> set:
                 
     _extract(node)
     return files
+
+@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=10))
+def _call_llm_with_retry(messages, tools):
+    return completion(
+        model=settings.DEFAULT_SUMMARIZATION_MODEL,
+        messages=messages,
+        tools=tools,
+        tool_choice="auto"
+    )
 
 def organize_vtree(vtree: dict, max_turns: int = 15) -> dict:
     """
@@ -64,11 +74,9 @@ def organize_vtree(vtree: dict, max_turns: int = 15) -> dict:
     for turn in range(max_turns):
         print(f"\n[Agent Loop] Turn {turn + 1}/{max_turns}")
         try:
-            response = completion(
-                model=settings.DEFAULT_SUMMARIZATION_MODEL,
+            response = _call_llm_with_retry(
                 messages=messages,
-                tools=tools,
-                tool_choice="auto"
+                tools=tools
             )
             
             message = response.choices[0].message

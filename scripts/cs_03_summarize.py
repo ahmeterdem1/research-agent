@@ -1,6 +1,8 @@
 import json
 import sys
 from pathlib import Path
+import concurrent.futures
+import argparse
 
 sys.path.append(str(Path(__file__).parent.parent))
 from config import settings
@@ -12,39 +14,64 @@ def robust_read(path: Path) -> str:
     except UnicodeDecodeError:
         return path.read_text(encoding="cp1252", errors="replace")
 
-def run():
+def run(overwrite: bool = False):
     in_path = settings.CACHE_DIR / "cs_02_extract.json"
+    out_path = settings.CACHE_DIR / "cs_03_summarize.json"
+
     if not in_path.exists():
         print(f"Error: Missing input {in_path}")
         sys.exit(1)
+
+    if out_path.exists() and not overwrite:
+        print(f"Summary file exists: {out_path} and overwrite is not set. Skipping summarization.")
+        return
+    elif out_path.exists():
+        print(f"Summary file already exists: {out_path}. Overwriting the summary file.")
         
     print(f"--- Stage 3: Summarizing Documents ---")
     data = json.loads(in_path.read_text(encoding="utf-8"))
     
+    # We will use a thread pool semaphore to limit concurrent requests
+    MAX_WORKERS = getattr(settings, "MAX_CONCURRENT_REQUESTS", 5)
+    
+    def process_leaf(node):
+        text_path = Path(node["text_path"])
+        print(f"Summarizing leaf node: {node['name']}...")
+        text = robust_read(text_path)
+        node["summary"] = summarize_text(text)
+        
+    def process_book(node):
+        print(f"Summarizing book {node['name']} from its sections...")
+        child_summaries = [f"{c['name']}: {c['summary']}" for c in node.get("children", [])]
+        book_summary = summarize_book(child_summaries)
+        node["summary"] = f"A book containing multiple sections. {book_summary}"
+
+    # Pass 1: Summarize all leaves (documents and book children) in parallel
+    leaves = []
     for item in data:
         if item.get("type") == "book":
-            child_summaries = []
             for child in item.get("children", []):
-                text_path = Path(child["text_path"])
-                print(f"Summarizing {child['name']}...")
-                text = robust_read(text_path)
-                child_summary = summarize_text(text)
-                child["summary"] = child_summary
-                child_summaries.append(f"{child['name']}: {child_summary}")
-                
-            print(f"Summarizing book {item['name']} from its sections...")
-            book_summary = summarize_book(child_summaries)
-            item["summary"] = f"A book containing multiple sections. {book_summary}"
+                leaves.append(child)
         else:
-            text_path = Path(item["text_path"])
-            print(f"Summarizing {item['name']}...")
-            text = robust_read(text_path)
-            item["summary"] = summarize_text(text)
+            leaves.append(item)
             
-    out_path = settings.CACHE_DIR / "cs_03_summarize.json"
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = [executor.submit(process_leaf, leaf) for leaf in leaves]
+        concurrent.futures.wait(futures)
+
+    # Pass 2: Summarize all books in parallel (depends on child summaries)
+    books = [item for item in data if item.get("type") == "book"]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = [executor.submit(process_book, book) for book in books]
+        concurrent.futures.wait(futures)
+            
+    
     out_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     print(f"Summarization complete. Wrote intermediary to {out_path}")
 
 if __name__ == "__main__":
-    run()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing summary file")
+    args = parser.parse_args()
+    run(args.overwrite)
 

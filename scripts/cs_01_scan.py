@@ -7,11 +7,14 @@ sys.path.append(str(Path(__file__).parent.parent))
 from config import settings
 from src.cold_start.scanner import scan_directory
 
-def run(library_path: str, book_threshold: int):
+def run(library_path: str, book_threshold: int, overwrite: bool = False):
     out_path = settings.CACHE_DIR / "cs_01_scan.json"
 
-    if Path(out_path).exists():
-        print(f"Scan file exists: {out_path}")
+    if Path(out_path).exists() and not overwrite:
+        print(f"Scan file exists: {out_path} and overwrite is not set. Skipping scan.")
+        return
+    elif Path(out_path).exists():
+        print(f"Scan file already exists: {out_path}. Overwriting the scan file.")
         return
 
     print(f"--- Stage 1: Scanning {library_path} ---")
@@ -41,5 +44,5 @@ if __name__ == "__main__":
     if not args.library_path:
         print("Missing library path.")
         sys.exit(1)
-    run(args.library_path, args.book_threshold)
+    run(args.library_path, args.book_threshold, args.overwrite)
 

@@ -26,8 +26,8 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
 # Extraction Configuration
 EXTRACTOR_MODE = os.getenv("EXTRACTOR_MODE", "docling") # 'docling' or 'llm'
-VISION_MODEL = os.getenv("VISION_MODEL", "openrouter/google/gemini-2.5-flash")
+VISION_MODEL = os.getenv("VISION_MODEL", "openrouter/google/gemini-1.5-pro")
+MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", 5))
 
 # Application Thresholds
 BOOK_PAGE_THRESHOLD = 30
-

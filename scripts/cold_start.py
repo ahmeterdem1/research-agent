@@ -48,10 +48,16 @@ def main():
     run_stage("cs_02_extract.py", extract_args)
     
     # 3. Summarize
-    run_stage("cs_03_summarize.py")
+    summarize_args = []
+    if args.overwrite:
+        summarize_args.append("--overwrite")
+    run_stage("cs_03_summarize.py", summarize_args)
     
-    # 4. Build Initial VTree
-    run_stage("cs_04_build_vtree.py", ["--library-path", lib_path])
+    
+    vtree_args = ["--library-path", lib_path]
+    if args.overwrite:
+        vtree_args.append("--overwrite")
+    run_stage("cs_04_build_vtree.py", vtree_args)
     
     # 5. Organize VTree (Optional)
     if not args.skip_organize:
