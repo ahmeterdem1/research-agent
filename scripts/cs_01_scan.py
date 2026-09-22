@@ -1,0 +1,38 @@
+import json
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).parent.parent))
+from config import settings
+from src.cold_start.scanner import scan_directory
+
+def run(library_path: str, book_threshold: int):
+    print(f"--- Stage 1: Scanning {library_path} ---")
+    files_info = scan_directory(library_path, book_threshold)
+    
+    output = []
+    for f in files_info:
+        output.append({
+            "real_path": f.real_path,
+            "name": f.name,
+            "file_type": f.file_type,
+            "page_count": f.page_count,
+            "is_book": f.is_book,
+            "is_splittable": f.is_splittable
+        })
+        
+    out_path = settings.CACHE_DIR / "cs_01_scan.json"
+    out_path.write_text(json.dumps(output, indent=2))
+    print(f"Scanned {len(output)} files. Wrote intermediary to {out_path}")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--library-path", type=str, default=settings.LIBRARY_ROOT_PATH)
+    parser.add_argument("--book-threshold", type=int, default=settings.BOOK_PAGE_THRESHOLD)
+    args = parser.parse_args()
+    if not args.library_path:
+        print("Missing library path.")
+        sys.exit(1)
+    run(args.library_path, args.book_threshold)
+

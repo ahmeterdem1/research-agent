@@ -144,3 +144,62 @@ class VTreeManager:
         
         return f"Successfully moved '{src}' to '{dest}'."
 
+    def check_local(self, title_or_doi: str) -> dict | None:
+        """
+        Check if a paper is already stored locally by title or DOI.
+        Returns the node dict if found, otherwise None.
+        """
+        def search(node):
+            if not isinstance(node, dict):
+                return None
+                
+            ntype = node.get("type")
+            if ntype in ("document", "book"):
+                if title_or_doi.lower() in node.get("name", "").lower():
+                    return node
+                if "doi" in node and node["doi"] and title_or_doi.lower() == node["doi"].lower():
+                    return node
+                    
+            if "children" in node:
+                for child in node["children"]:
+                    found = search(child)
+                    if found:
+                        return found
+            return None
+            
+        return search(self.vtree.get("root"))
+
+    def update_ancestor_summaries(self, vpath: str, new_summary: str):
+        """
+        Recursively bubble up summary updates when new documents are added or changed.
+        Currently a placeholder for where the LLM summarization logic would be invoked.
+        """
+        # In a full implementation, this would walk up the tree from vpath to root,
+        # gathering child summaries and calling the LLM to update each directory's summary.
+        # For now, we just touch the nodes to indicate they need updating or do a simple append.
+        parts = [p for p in vpath.split("/") if p]
+        
+        # Traverse and collect all ancestors
+        ancestors = []
+        curr = self.vtree.get("root")
+        if curr:
+            ancestors.append(curr)
+            
+        for part in parts[:-1]: # exclude the file itself
+            found = False
+            for child in curr.get("children", []):
+                if child.get("name") == part:
+                    curr = child
+                    ancestors.append(curr)
+                    found = True
+                    break
+            if not found:
+                break
+                
+        # We can tag them as "needs_re-summary" or directly call the summarizer if we import it.
+        # To avoid circular imports and keep operations deterministic, we'll just tag them here.
+        # The agent or background task can actually run the LLM.
+        for node in ancestors:
+            node["_needs_summary_update"] = True
+
+
