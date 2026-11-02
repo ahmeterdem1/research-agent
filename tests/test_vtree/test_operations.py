@@ -79,3 +79,21 @@ def test_search_library_by_doi(sample_vtree):
     results = manager.search_library("10.1234/attention")
     assert len(results) == 1
     assert results[0]["name"] == "attention.pdf"
+
+
+def test_add_document_creates_dirs_and_bubbles_ancestors(sample_vtree):
+    manager = VTreeManager(sample_vtree)
+    added = manager.add_document(
+        "/dl/transformers",
+        {
+            "name": "flash_attention.pdf",
+            "real_path": "/tmp/flash.pdf",
+            "summary": "IO-aware exact attention.",
+        },
+    )
+    assert added["virtual_path"] == "/dl/transformers/flash_attention.pdf"
+    node = manager._get_node("/dl/transformers/flash_attention.pdf")
+    assert node is not None and node["summary"] == "IO-aware exact attention."
+    assert manager._get_node("/dl")["_needs_summary_update"] is True
+    assert manager._get_node("/dl/transformers")["_needs_summary_update"] is True
+

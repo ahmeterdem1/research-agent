@@ -1,13 +1,35 @@
-from fastmcp import FastMCP
-from typing import Optional
-from duckduckgo_search import DDGS
-from semanticscholar import SemanticScholar
-import requests
+"""
+Web & Academic Search MCP Server (``ra-mcp-search``).
+
+Provides DuckDuckGo web search, Semantic Scholar paper search & metadata,
+arXiv/web document reading, and forward/backward citation graph edges.
+"""
+
+from pathlib import Path
 import re
-import os
+import sys
+import tempfile
+import urllib.request
+
+from duckduckgo_search import DDGS
+from fastmcp import FastMCP
+import requests
+from semanticscholar import SemanticScholar
+
+sys.path.append(str(Path(__file__).parent.parent.parent))
+
+from config.settings import get_logger
+from src.subagents.citation_walker import (
+    get_citations,
+    get_references,
+    walk_citation_graph as cw_run,
+)
+
+logger = get_logger(__name__)
 
 mcp = FastMCP("SearchTools")
 sch = SemanticScholar()
+
 
 @mcp.tool()
 def duckduckgo_search(query: str, num_results: int = 5) -> str:
@@ -19,17 +41,19 @@ def duckduckgo_search(query: str, num_results: int = 5) -> str:
         results = DDGS().text(query, max_results=num_results)
         if not results:
             return "No results found."
-            
+
         formatted = []
         for r in results:
             title = r.get("title", "No Title")
             href = r.get("href", "No Link")
             body = r.get("body", "No Snippet")
             formatted.append(f"Title: {title}\nURL: {href}\nSnippet: {body}\n---")
-            
+
         return "\n".join(formatted)
     except Exception as e:
+        logger.warning("duckduckgo_search failed for '%s': %s", query, e)
         return f"Search failed: {e}"
+
 
 @mcp.tool()
 def scholar_search(query: str, num_results: int = 5) -> str:
@@ -42,18 +66,18 @@ def scholar_search(query: str, num_results: int = 5) -> str:
         params = {
             "query": query,
             "limit": num_results,
-            "fields": "title,authors,year,citationCount,url,externalIds"
+            "fields": "title,authors,year,citationCount,url,externalIds",
         }
         res = requests.get(url, params=params, timeout=10)
-        
+
         if res.status_code == 429:
             return "Error: Semantic Scholar API Rate Limit Exceeded (429)."
         res.raise_for_status()
-        
+
         data = res.json()
         if "data" not in data or not data["data"]:
             return "No academic papers found."
-            
+
         formatted = []
         for p in data["data"]:
             authors = ", ".join([a.get("name", "") for a in p.get("authors", [])])
@@ -62,7 +86,7 @@ def scholar_search(query: str, num_results: int = 5) -> str:
             url_val = p.get("url", "No URL")
             paper_id = p.get("paperId", "Unknown ID")
             doi = p.get("externalIds", {}).get("DOI", "No DOI")
-            
+
             formatted.append(
                 f"Title: {p.get('title')}\n"
                 f"Paper ID: {paper_id}\n"
@@ -71,39 +95,39 @@ def scholar_search(query: str, num_results: int = 5) -> str:
                 f"Year: {year} | Citations: {citations}\n"
                 f"URL: {url_val}\n---"
             )
-            
+
         return "\n".join(formatted)
     except Exception as e:
+        logger.warning("scholar_search failed for '%s': %s", query, e)
         return f"Scholar search failed: {e}"
+
 
 @mcp.tool()
 def get_paper_details(paper_id_or_doi: str) -> str:
     """
-    Fetch full details, including the abstract, for a specific paper from Semantic Scholar.
+    Fetch full details, including the abstract and TLDR, for a specific paper from Semantic Scholar.
     Input can be a Semantic Scholar Paper ID or a DOI (e.g., '10.1145/12345').
     """
     try:
         query_id = f"DOI:{paper_id_or_doi}" if "/" in paper_id_or_doi else paper_id_or_doi
         url = f"https://api.semanticscholar.org/graph/v1/paper/{query_id}"
-        params = {
-            "fields": "title,abstract,authors,year,citationCount,url,venue,externalIds,tldr"
-        }
+        params = {"fields": "title,abstract,authors,year,citationCount,url,venue,externalIds,tldr"}
         res = requests.get(url, params=params, timeout=10)
-        
+
         if res.status_code == 429:
             return "Error: Semantic Scholar API Rate Limit Exceeded (429)."
         res.raise_for_status()
-        
+
         p = res.json()
         authors = ", ".join([a.get("name", "") for a in p.get("authors", [])])
         year = p.get("year", "Unknown")
         venue = p.get("venue", "Unknown Venue")
         citations = p.get("citationCount", 0)
         abstract = p.get("abstract", "No Abstract Available")
-        
+
         tldr_obj = p.get("tldr")
         tldr = tldr_obj.get("text") if tldr_obj else "No TLDR Available"
-        
+
         return (
             f"Title: {p.get('title', 'Unknown')}\n"
             f"Authors: {authors}\n"
@@ -114,7 +138,45 @@ def get_paper_details(paper_id_or_doi: str) -> str:
             f"Abstract:\n{abstract}"
         )
     except Exception as e:
+        logger.warning("get_paper_details failed for '%s': %s", paper_id_or_doi, e)
         return f"Failed to get paper details: {e}"
+
+
+@mcp.tool()
+def get_paper_references(paper_id_or_doi: str, limit: int = 10) -> str:
+    """
+    Fetch backward references (papers cited BY the given paper) from Semantic Scholar.
+    Used by the @citation-walker subagent or primary researcher to trace foundational work.
+    """
+    refs = get_references(paper_id_or_doi, limit=limit)
+    if not refs:
+        return f"No references found for '{paper_id_or_doi}' (or rate-limited)."
+    lines = [f"References cited by '{paper_id_or_doi}' ({len(refs)}):"]
+    for r in refs:
+        lines.append(
+            f"- Paper ID: {r['id']} | Title: {r.get('title', 'Unknown')} "
+            f"| Year: {r.get('year', '?')} | Citations: {r.get('citationCount', '?')}"
+        )
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def get_paper_citations(paper_id_or_doi: str, limit: int = 10) -> str:
+    """
+    Fetch forward citations (newer papers that cite the given paper) from Semantic Scholar.
+    Used by the @citation-walker subagent or primary researcher to trace follow-up work.
+    """
+    cits = get_citations(paper_id_or_doi, limit=limit)
+    if not cits:
+        return f"No citations found for '{paper_id_or_doi}' (or rate-limited)."
+    lines = [f"Papers citing '{paper_id_or_doi}' ({len(cits)}):"]
+    for c in cits:
+        lines.append(
+            f"- Paper ID: {c['id']} | Title: {c.get('title', 'Unknown')} "
+            f"| Year: {c.get('year', '?')} | Citations: {c.get('citationCount', '?')}"
+        )
+    return "\n".join(lines)
+
 
 @mcp.tool()
 def read_online_document(url_or_arxiv_id: str) -> str:
@@ -122,54 +184,58 @@ def read_online_document(url_or_arxiv_id: str) -> str:
     Fetches the raw text of a document from the web.
     If given an arXiv ID (e.g. '1706.03762' or 'arxiv:1706.03762'), it downloads the PDF and extracts text.
     If given a regular URL, it fetches the raw HTML/text.
-    
-    WARNING: Before using this tool to fetch an academic paper, ALWAYS use the `search_library` tool 
+
+    WARNING: Before using this tool to fetch an academic paper, ALWAYS use the `search_library` tool
     first to ensure it hasn't already been downloaded to the local VTree library under a different name!
     """
-    # Placeholder for arxiv/url reading logic.
-    # We can use the existing `extract_pdf_docling` or `extract_pdf_llm` if we download it to a temp dir.
-    import tempfile
-    from pathlib import Path
-    import urllib.request
-    from src.cold_start.extractor import extract_content
-    
     try:
-        arxiv_match = re.search(r'(\d{4}\.\d{4,5}(v\d+)?)', url_or_arxiv_id)
-        if arxiv_match or url_or_arxiv_id.lower().startswith('arxiv:'):
-            arxiv_id = arxiv_match.group(1) if arxiv_match else url_or_arxiv_id.split(':')[-1]
+        arxiv_match = re.search(r"(\d{4}\.\d{4,5}(v\d+)?)", url_or_arxiv_id)
+        if arxiv_match or url_or_arxiv_id.lower().startswith("arxiv:"):
+            from src.cold_start.extractor import extract_content
+
+            arxiv_id = arxiv_match.group(1) if arxiv_match else url_or_arxiv_id.split(":")[-1]
             pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
-            
+
             with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
                 urllib.request.urlretrieve(pdf_url, tmp.name)
                 tmp_path = Path(tmp.name)
-                
-            content = extract_content(tmp_path)
-            tmp_path.unlink() # cleanup
-            
+
+            try:
+                content = extract_content(tmp_path)
+            finally:
+                tmp_path.unlink(missing_ok=True)
+
             if content:
                 return content.text
             return "Failed to extract text from arXiv PDF."
-            
-        else:
-            # Simple HTTP GET for other URLs
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            response = requests.get(url_or_arxiv_id, headers=headers, timeout=10)
-            response.raise_for_status()
-            
-            # Very naive html stripping for placeholder
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(response.text, 'html.parser')
-            return soup.get_text(separator='\n', strip=True)
-            
+
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url_or_arxiv_id, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        return soup.get_text(separator="\n", strip=True)
+
     except Exception as e:
+        logger.warning("read_online_document failed for '%s': %s", url_or_arxiv_id, e)
         return f"Failed to read online document: {e}"
+
 
 @mcp.tool()
 def walk_citation_graph(start_doi_or_id: str, depth: int = 2) -> str:
     """
-    Spawns an autonomous subagent that explores the citation graph forward and backward 
-    starting from the given paper ID or DOI. It evaluates abstracts and returns a highly 
-    curated bibliography of relevant related work.
+    Explores 1-hop forward and backward citations starting from the given paper ID or DOI.
+    For deeper multi-hop exploration, delegate to the `@citation-walker` subagent.
     """
-    from src.subagents.citation_walker import walk_citation_graph as cw_run
     return cw_run(start_doi_or_id, depth)
+
+
+def main() -> None:
+    logger.info("Starting SearchTools MCP server")
+    mcp.run()
+
+
+if __name__ == "__main__":
+    main()

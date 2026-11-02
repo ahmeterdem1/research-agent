@@ -1,12 +1,14 @@
 """
-Database initialisation and base-ontology seeding.
+Database initialisation, schema upgrades, and base-ontology seeding.
 
 ``init_db`` is idempotent: it can be called on every startup (and by every
-``KGStore`` instance) without duplicating seed rows.
+``KGStore`` instance) without duplicating seed rows, and transparently
+upgrades v1 databases to v2 (adding ``scope`` and ``project_id`` to ``triplets``).
 """
 
 from pathlib import Path
 
+from config.settings import get_logger
 from src.db.connection import connect
 from src.kg.schema import (
     BASE_CLASSES,
@@ -17,15 +19,38 @@ from src.kg.schema import (
     USER_ENTITY_NAME,
 )
 
+logger = get_logger(__name__)
+
+
+def _upgrade_v1_to_v2_if_needed(conn) -> None:
+    """If an older triplets table exists without scope/project_id, add those columns."""
+    table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='triplets'"
+    ).fetchone()
+    if not table_exists:
+        return
+
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(triplets)").fetchall()}
+    if "scope" not in cols:
+        logger.info("Upgrading triplets table: adding 'scope' column")
+        conn.execute(
+            "ALTER TABLE triplets ADD COLUMN scope TEXT NOT NULL DEFAULT 'global' "
+            "CHECK (scope IN ('global', 'project'))"
+        )
+    if "project_id" not in cols:
+        logger.info("Upgrading triplets table: adding 'project_id' column")
+        conn.execute("ALTER TABLE triplets ADD COLUMN project_id TEXT")
+
 
 def init_db(db_path: str | Path) -> None:
-    """Create all tables (if missing) and seed the base ontology."""
+    """Create all tables (if missing), apply column migrations, and seed the base ontology."""
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
     with connect(db_path) as conn:
-        # WAL lets the API read while an MCP tool is writing.
+        # WAL lets multiple processes read while an MCP tool is writing.
         conn.execute("PRAGMA journal_mode = WAL")
+        _upgrade_v1_to_v2_if_needed(conn)
         conn.executescript(SCHEMA_SQL)
 
         conn.executemany(
@@ -43,7 +68,5 @@ def init_db(db_path: str | Path) -> None:
             (USER_ENTITY_NAME, USER_CLASS_NAME),
         )
 
-        # NOTE (Phase 6): chat_sessions, chat_messages and usage tables will be
-        # created here as well, bumping SCHEMA_VERSION.
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-
+    logger.debug("Database initialized at %s (schema v%d)", db_path, SCHEMA_VERSION)

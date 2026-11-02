@@ -299,3 +299,137 @@ def test_persistence_across_store_instances(store, clock):
     reopened = KGStore(store.db_path, now_fn=clock)
     assert [t.object for t in reopened.query(subject="User")] == ["Causality"]
 
+
+# --------------------------------------------------------------------------- #
+# Dual-Scope (Global vs Project) Separation & v1->v2 Migration
+# --------------------------------------------------------------------------- #
+def test_project_scope_isolation_and_global_sharing(tmp_path, clock):
+    from src.kg.store import KGStore
+
+    db_file = tmp_path / "shared_kg.db"
+    store_a = KGStore(db_file, now_fn=clock, default_project_id="project-alpha")
+    store_b = KGStore(db_file, now_fn=clock, default_project_id="project-beta")
+
+    # 1. Global fact added in project-alpha is visible everywhere
+    g_trip, _ = store_a.add_triplet(
+        "User", "User", "has_read", "Attention Is All You Need", "Paper", scope="global"
+    )
+    assert g_trip.scope == "global" and g_trip.project_id is None
+
+    # 2. Project-local facts added in alpha and beta
+    a_trip, _ = store_a.add_triplet(
+        "User", "User", "argued_that", "Alpha hypothesis holds", "Argument", scope="project"
+    )
+    b_trip, _ = store_b.add_triplet(
+        "User", "User", "argued_that", "Beta hypothesis holds", "Argument", scope="project"
+    )
+    assert a_trip.scope == "project" and a_trip.project_id == "project-alpha"
+    assert b_trip.scope == "project" and b_trip.project_id == "project-beta"
+
+    # 3. Querying with scope='all' in alpha sees global + alpha, NOT beta
+    alpha_all = {t.object for t in store_a.query(subject="User", scope="all")}
+    assert alpha_all == {"Attention Is All You Need", "Alpha hypothesis holds"}
+
+    # 4. Querying with scope='all' in beta sees global + beta, NOT alpha
+    beta_all = {t.object for t in store_b.query(subject="User", scope="all")}
+    assert beta_all == {"Attention Is All You Need", "Beta hypothesis holds"}
+
+    # 5. Querying with scope='global' or scope='project' filters strictly
+    assert {t.object for t in store_a.query(subject="User", scope="global")} == {"Attention Is All You Need"}
+    assert {t.object for t in store_a.query(subject="User", scope="project")} == {"Alpha hypothesis holds"}
+    assert {t.object for t in store_b.query(subject="User", scope="project")} == {"Beta hypothesis holds"}
+
+
+def test_same_fact_can_exist_in_global_and_project_separately(store):
+    t_proj, created1 = store.add_triplet(
+        "User", "User", "prefers", "PyTorch", "Preference", scope="project", project_id="proj-1"
+    )
+    t_glob, created2 = store.add_triplet(
+        "User", "User", "prefers", "PyTorch", "Preference", scope="global"
+    )
+    assert created1 and created2
+    assert t_proj.id != t_glob.id
+
+
+def test_promote_and_demote_triplet_scope(store):
+    t, _ = store.add_triplet(
+        "User", "User", "argued_that", "Sparse attention suffices", "Argument",
+        scope="project", project_id="proj-1",
+    )
+    assert t.scope == "project" and t.project_id == "proj-1"
+
+    promoted = store.update_triplet(t.id, scope="global")
+    assert promoted.scope == "global" and promoted.project_id is None
+
+    demoted = store.update_triplet(t.id, scope="project", project_id="proj-2")
+    assert demoted.scope == "project" and demoted.project_id == "proj-2"
+
+
+def test_invalid_scope_rejected(store):
+    with pytest.raises(KGError, match="Invalid scope"):
+        store.add_triplet("User", "User", "prefers", "Vim", "Preference", scope="universe")
+    with pytest.raises(KGError, match="Invalid query scope"):
+        store.query(scope="universe")
+
+
+def test_v1_database_upgrades_cleanly_to_v2(tmp_path, clock):
+    from src.kg.store import KGStore
+
+    db_file = tmp_path / "legacy_v1.db"
+    conn = sqlite3.connect(db_file)
+    try:
+        # Create a v1-style triplets table without scope or project_id
+        conn.executescript(
+            """
+            CREATE TABLE ontology_classes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL COLLATE NOCASE,
+                description TEXT,
+                created_by TEXT NOT NULL DEFAULT 'system',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE ontology_relations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL COLLATE NOCASE,
+                domain TEXT,
+                range TEXT,
+                description TEXT,
+                created_by TEXT NOT NULL DEFAULT 'system',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE entities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL COLLATE NOCASE,
+                class TEXT NOT NULL,
+                properties TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(name, class)
+            );
+            CREATE TABLE triplets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject_id INTEGER NOT NULL,
+                relation TEXT NOT NULL,
+                object_id INTEGER NOT NULL,
+                confidence REAL NOT NULL DEFAULT 1.0,
+                source_chat TEXT,
+                context TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                ttl_seconds INTEGER,
+                expires_at TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                invalidated_reason TEXT
+            );
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Opening KGStore should run _upgrade_v1_to_v2_if_needed without error
+    upgraded = KGStore(db_file, now_fn=clock, default_project_id="migrated-proj")
+    t, _ = upgraded.add_triplet("User", "User", "interested_in", "Migration", "Topic", scope="project")
+    assert t.scope == "project" and t.project_id == "migrated-proj"
+
+

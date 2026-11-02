@@ -65,3 +65,24 @@ def test_topic_context(store):
     facts = get_topic_context(store, "Sutton & Barto", depth=2)
     assert {t.relation for t in facts} == {"covers", "has_read", "interested_in"}
 
+
+def test_dual_scope_profile_formatting(store):
+    store.add_triplet("User", "User", "has_fact", "ML Researcher", "PersonalFact", scope="global")
+    store.add_triplet(
+        "User", "User", "argued_that", "Local hypothesis A", "Argument",
+        scope="project", project_id="repo-alpha",
+    )
+    store.add_triplet(
+        "User", "User", "argued_that", "Other repo hypothesis", "Argument",
+        scope="project", project_id="repo-beta",
+    )
+
+    profile = get_user_profile(store, scope="all", project_id="repo-alpha")
+    text = format_user_profile(profile)
+    assert "# Global User Profile (Applies Across All Projects)" in text
+    assert "# Current Project Profile (project: repo-alpha)" in text
+    assert "[GLOBAL] ML Researcher" in text
+    assert "[PROJECT: repo-alpha] Local hypothesis A" in text
+    assert "Other repo hypothesis" not in text
+
+

@@ -130,6 +130,44 @@ def test_get_ontology_and_extend():
     assert "- uses_dataset (Paper -> Dataset)" in kg_tools.get_ontology()
 
 
+def test_mcp_dual_scope_workflow(isolated_store):
+    isolated_store.default_project_id = "opencode-proj"
+
+    res_global = kg_tools.add_triplet(
+        subject="User", relation="has_fact", object="Prefers mathematical rigor",
+        object_class="PersonalFact", scope="global",
+    )
+    assert "[GLOBAL]" in res_global
+
+    res_proj = kg_tools.add_triplet(
+        subject="User", relation="argued_that", object="Graph depth 2 is optimal here",
+        object_class="Argument", scope="project",
+    )
+    assert "[PROJECT: opencode-proj]" in res_proj
+    proj_tid = _id(res_proj)
+
+    # Query only project scope
+    only_proj = kg_tools.query_kg(subject="User", scope="project")
+    assert "Graph depth 2 is optimal here" in only_proj
+    assert "Prefers mathematical rigor" not in only_proj
+
+    # Query only global scope
+    only_glob = kg_tools.query_kg(subject="User", scope="global")
+    assert "Prefers mathematical rigor" in only_glob
+    assert "Graph depth 2 is optimal here" not in only_glob
+
+    # Profile summary with scope='all' shows both sections
+    prof_all = kg_tools.get_user_profile_summary(scope="all")
+    assert "# Global User Profile" in prof_all
+    assert "# Current Project Profile (project: opencode-proj)" in prof_all
+
+    # Promote project fact to global via update_triplet
+    promoted = kg_tools.update_triplet(proj_tid, scope="global")
+    assert "[GLOBAL]" in promoted
+    assert kg_tools.query_kg(subject="User", scope="project") == "No matching facts found."
+
+
+
 def test_tools_registered_on_server():
     import asyncio
 

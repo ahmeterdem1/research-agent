@@ -77,3 +77,19 @@ def test_read_online_document_http(mock_get):
     
     result = read_online_document("http://test.com")
     assert "Test Content HTML" in result
+
+
+@patch("src.mcp_servers.search_tools.get_references")
+@patch("src.mcp_servers.search_tools.get_citations")
+def test_get_paper_references_and_citations_tools(mock_cits, mock_refs):
+    from src.mcp_servers.search_tools import get_paper_citations, get_paper_references
+
+    mock_refs.return_value = [{"id": "r1", "title": "Foundational Paper", "year": 2015, "citationCount": 500}]
+    mock_cits.return_value = [{"id": "c1", "title": "Follow-up Paper", "year": 2020, "citationCount": 120}]
+
+    ref_out = get_paper_references("123", limit=5)
+    cit_out = get_paper_citations("123", limit=5)
+
+    assert "Foundational Paper" in ref_out and "r1" in ref_out
+    assert "Follow-up Paper" in cit_out and "c1" in cit_out
+

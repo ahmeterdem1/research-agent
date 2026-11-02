@@ -1,46 +1,104 @@
-import json
-from semanticscholar import SemanticScholar
-# NOTE: Placeholder for Future Implementation
-# In Phase 5, this will likely be a true conversational subagent with its own system prompt,
-# powered by the Orchestrator, that uses get_references/get_citations tools iteratively.
-# For now, this is just a stub that mimics the planned traversal tools.
+"""
+Citation Graph traversal helpers.
+
+In the OpenCode architecture, deep multi-hop citation walks are driven by the
+native ``@citation-walker`` subagent (``.opencode/agents/citation-walker.md``),
+which calls ``get_paper_references`` and ``get_paper_citations`` exposed by
+``search_tools.py`` in its own isolated context window.
+"""
 
 import requests
 
-def get_references(paper_id: str, limit: int = 10) -> list:
-    """Gets papers cited BY the given paper (backward search)."""
+from config.settings import get_logger
+
+logger = get_logger(__name__)
+
+
+def _normalize_paper_id(paper_id_or_doi: str) -> str:
+    val = paper_id_or_doi.strip()
+    if "/" in val and not val.upper().startswith("DOI:") and not val.upper().startswith("ARXIV:"):
+        return f"DOI:{val}"
+    return val
+
+
+def get_references(paper_id: str, limit: int = 10) -> list[dict]:
+    """Gets papers cited BY the given paper (backward citation search)."""
     try:
-        url = f"https://api.semanticscholar.org/graph/v1/paper/{paper_id}"
-        res = requests.get(url, params={"fields": "references,references.title,references.paperId"}, timeout=10)
+        query_id = _normalize_paper_id(paper_id)
+        url = f"https://api.semanticscholar.org/graph/v1/paper/{query_id}"
+        res = requests.get(
+            url,
+            params={"fields": "references,references.title,references.paperId,references.year,references.citationCount"},
+            timeout=10,
+        )
         if res.status_code == 429:
+            logger.warning("Semantic Scholar 429 rate limit in get_references(%s)", paper_id)
             return []
         res.raise_for_status()
         paper = res.json()
-        return [{"id": r.get("paperId"), "title": r.get("title")} for r in paper.get("references", [])[:limit] if r.get("paperId")]
-    except:
+        return [
+            {
+                "id": r.get("paperId"),
+                "title": r.get("title"),
+                "year": r.get("year"),
+                "citationCount": r.get("citationCount"),
+            }
+            for r in paper.get("references", [])[:limit]
+            if r.get("paperId")
+        ]
+    except Exception as e:
+        logger.warning("get_references failed for %s: %s", paper_id, e)
         return []
 
-def get_citations(paper_id: str, limit: int = 10) -> list:
-    """Gets papers citing the given paper (forward search)."""
+
+def get_citations(paper_id: str, limit: int = 10) -> list[dict]:
+    """Gets papers citing the given paper (forward citation search)."""
     try:
-        url = f"https://api.semanticscholar.org/graph/v1/paper/{paper_id}"
-        res = requests.get(url, params={"fields": "citations,citations.title,citations.paperId"}, timeout=10)
+        query_id = _normalize_paper_id(paper_id)
+        url = f"https://api.semanticscholar.org/graph/v1/paper/{query_id}"
+        res = requests.get(
+            url,
+            params={"fields": "citations,citations.title,citations.paperId,citations.year,citations.citationCount"},
+            timeout=10,
+        )
         if res.status_code == 429:
+            logger.warning("Semantic Scholar 429 rate limit in get_citations(%s)", paper_id)
             return []
         res.raise_for_status()
         paper = res.json()
-        return [{"id": c.get("paperId"), "title": c.get("title")} for c in paper.get("citations", [])[:limit] if c.get("paperId")]
-    except:
+        return [
+            {
+                "id": c.get("paperId"),
+                "title": c.get("title"),
+                "year": c.get("year"),
+                "citationCount": c.get("citationCount"),
+            }
+            for c in paper.get("citations", [])[:limit]
+            if c.get("paperId")
+        ]
+    except Exception as e:
+        logger.warning("get_citations failed for %s: %s", paper_id, e)
         return []
 
-def filter_influential(papers: list) -> list:
-    """Placeholder tool: Ask LLM to filter a list of references based on a criteria."""
-    pass
 
 def walk_citation_graph(start_doi_or_id: str, depth: int = 2) -> str:
     """
-    Kicks off the autonomous subagent traversal.
-    Returns the final annotated path summary to the main agent.
+    1-hop summary helper (retained for direct tool calls and backward compatibility;
+    multi-hop exploration in OpenCode is performed by the @citation-walker subagent).
     """
-    # NOTE: In the future, this will spawn an LLM loop. For now, it's a mock return.
-    return f"Citation Walk Summary for {start_doi_or_id}:\n- Found 5 highly relevant papers in the graph.\n- (Future implementation will contain detailed LLM-curated bibliography)."
+    refs = get_references(start_doi_or_id, limit=5)
+    cits = get_citations(start_doi_or_id, limit=5)
+
+    lines = [f"Citation Walk Summary for {start_doi_or_id}:"]
+    if refs:
+        lines.append("\nBackward References (cited by this paper):")
+        for r in refs:
+            lines.append(f"- [{r['id']}] {r.get('title', 'Unknown')}")
+    if cits:
+        lines.append("\nForward Citations (papers citing this paper):")
+        for c in cits:
+            lines.append(f"- [{c['id']}] {c.get('title', 'Unknown')}")
+    if not refs and not cits:
+        lines.append("- No citations or references retrieved (or rate-limited).")
+
+    return "\n".join(lines)

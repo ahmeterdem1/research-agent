@@ -1,137 +1,287 @@
-import json
-from fastmcp import FastMCP
-from typing import List, Optional
-from pathlib import Path
+"""
+Document Tools MCP Server (``ra-mcp-docs``).
 
+Provides read and search access to both the system-wide **Global VTree**
+(``~/.research-agent/vtrees/global.json``) and an optional **Project-Local VTree**
+(``<project>/.opencode/vtree.json`` or ``$RA_VTREE_PATH``).
+"""
+
+from pathlib import Path
 import sys
+from typing import List, Literal, Optional
+
+from fastmcp import FastMCP
+
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from config import settings
-from src.vtree.store import VTreeStore
+from config.settings import get_logger
 from src.vtree.operations import VTreeManager
+from src.vtree.store import VTreeStore
+
+logger = get_logger(__name__)
 
 mcp = FastMCP("DocumentTools")
 
-# Helper to get active tree manager
-def get_manager() -> VTreeManager:
-    store = VTreeStore(settings.VTREE_PATH)
+
+def get_manager(scope: str = "global") -> VTreeManager:
+    """Load the VTreeManager for either 'global' or 'project' scope."""
+    if scope == "project":
+        vtree_path = settings.get_project_vtree_path(must_exist=True)
+        if not vtree_path:
+            raise FileNotFoundError(
+                "No project-local VTree found at '.opencode/vtree.json'. "
+                "Use scope='global' or run `ra-cli index --scope project`."
+            )
+    else:
+        vtree_path = settings.get_global_vtree_path()
+
+    store = VTreeStore(vtree_path)
     vtree_dict = store.load_as_dict()
     return VTreeManager(vtree_dict)
 
-@mcp.tool()
-def get_dir_summary(virtual_path: str) -> str:
-    """Gets the summary of a specific directory."""
-    manager = get_manager()
-    node = manager._get_node(virtual_path)
-    if not node:
-        return f"Error: Path '{virtual_path}' not found."
-    if node.get("type") != "directory":
-        return f"Error: '{virtual_path}' is not a directory."
-    
-    return node.get("summary", "No summary available.")
+
+def _iter_managers(scope: str) -> list[tuple[str, VTreeManager]]:
+    """
+    Yield (scope_label, manager) pairs for the requested scope ('global', 'project', or 'all').
+    Keeping `get_manager()` as a single-arg call for 'global' preserves unit test mocks.
+    """
+    s = (scope or "all").strip().lower()
+    managers: list[tuple[str, VTreeManager]] = []
+
+    if s in ("global", "all"):
+        try:
+            # Call get_manager() with no args when global so legacy mock_get_manager works seamlessly
+            managers.append(("GLOBAL", get_manager()))
+        except FileNotFoundError:
+            if s == "global":
+                raise
+
+    if s in ("project", "all"):
+        proj_path = settings.get_project_vtree_path(must_exist=True)
+        if proj_path is not None:
+            try:
+                managers.append((f"PROJECT:{settings.get_active_project_id()}", get_manager("project")))
+            except FileNotFoundError:
+                if s == "project":
+                    raise
+        elif s == "project":
+            raise FileNotFoundError(
+                f"No project-local VTree configured for project '{settings.get_active_project_id()}'."
+            )
+
+    return managers
+
 
 @mcp.tool()
-def list_doc_summaries(virtual_path: str) -> str:
-    """Lists summaries of all immediate items in a directory."""
-    manager = get_manager()
+def get_dir_summary(
+    virtual_path: str,
+    scope: Literal["global", "project"] = "global",
+) -> str:
+    """Gets the summary of a specific virtual directory in either the 'global' or 'project' VTree."""
+    try:
+        manager = get_manager() if scope == "global" else get_manager("project")
+    except FileNotFoundError as e:
+        return f"Error: {e}"
+
     node = manager._get_node(virtual_path)
     if not node:
-        return f"Error: Path '{virtual_path}' not found."
+        return f"Error: Path '{virtual_path}' not found in {scope} VTree."
+    if node.get("type") != "directory":
+        return f"Error: '{virtual_path}' is not a directory."
+
+    return node.get("summary", "No summary available.")
+
+
+@mcp.tool()
+def list_doc_summaries(
+    virtual_path: str,
+    scope: Literal["global", "project"] = "global",
+) -> str:
+    """Lists summaries of all immediate items in a virtual directory ('global' or 'project' VTree)."""
+    try:
+        manager = get_manager() if scope == "global" else get_manager("project")
+    except FileNotFoundError as e:
+        return f"Error: {e}"
+
+    node = manager._get_node(virtual_path)
+    if not node:
+        return f"Error: Path '{virtual_path}' not found in {scope} VTree."
     if node.get("type") not in ("directory", "book"):
         return f"Error: '{virtual_path}' is not a directory or book."
-        
+
     children = node.get("children", [])
     if not children:
         return "Empty."
-        
+
     result = []
     for c in children:
         name = c.get("name", "unknown")
         summary = c.get("summary", "No summary.")
         result.append(f"- **{name}**: {summary}")
-        
+
     return "\n".join(result)
 
+
 @mcp.tool()
-def list_tree(virtual_path: str, include_summaries: bool = False, max_depth: int = 3) -> str:
-    """Lists the tree structure starting from the given path up to max_depth."""
-    manager = get_manager()
-    start_node = manager._get_node(virtual_path)
-    if not start_node:
-        return f"Error: Path '{virtual_path}' not found."
-        
+def list_tree(
+    virtual_path: str = "/",
+    include_summaries: bool = False,
+    max_depth: int = 3,
+    scope: Literal["all", "global", "project"] = "all",
+) -> str:
+    """
+    Lists the virtual directory tree structure starting from ``virtual_path`` up to ``max_depth``.
+    By default ``scope="all"`` displays the Global VTree and, if present, the Project-Local VTree.
+    """
+    try:
+        managers = _iter_managers(scope)
+    except FileNotFoundError as e:
+        return f"Error: {e}"
+
+    if not managers:
+        return "No Virtual Tree libraries found. Run `ra-cli index --library-path <path>` to build one."
+
     def _walk(node, current_depth, prefix=""):
         if current_depth > max_depth:
             return ""
-            
+
         res = f"{prefix}- {node.get('name', 'unnamed')} ({node.get('type')})"
         if include_summaries and node.get("summary"):
             res += f": {node.get('summary')}"
         res += "\n"
-        
+
         if "children" in node:
             for child in node["children"]:
                 res += _walk(child, current_depth + 1, prefix + "  ")
         return res
-        
-    return _walk(start_node, 1).strip()
+
+    blocks = []
+    for label, mgr in managers:
+        start_node = mgr._get_node(virtual_path)
+        if not start_node:
+            blocks.append(f"[{label}] Error: Path '{virtual_path}' not found.")
+        else:
+            rendered = _walk(start_node, 1).strip()
+            blocks.append(f"[{label}]\n{rendered}" if len(managers) > 1 else rendered)
+
+    return "\n\n".join(blocks)
+
 
 @mcp.tool()
-def get_document(virtual_path: str) -> str:
-    """Gets the full text and headings of a local document by its virtual path."""
-    manager = get_manager()
+def get_document(
+    virtual_path: str,
+    scope: Literal["global", "project"] = "global",
+) -> str:
+    """Gets the full extracted Markdown text of a local document by its virtual path."""
+    try:
+        manager = get_manager() if scope == "global" else get_manager("project")
+    except FileNotFoundError as e:
+        return f"Error: {e}"
+
     node = manager._get_node(virtual_path)
     if not node:
-        return f"Error: Path '{virtual_path}' not found."
+        return f"Error: Path '{virtual_path}' not found in {scope} VTree."
     if node.get("type") not in ("document", "book"):
         return f"Error: '{virtual_path}' is not a document."
-        
+
     text_path = node.get("text_path")
     if not text_path or not Path(text_path).exists():
-        return f"Error: Text content not found for {virtual_path}. It may not have been extracted properly during cold start."
-        
+        return (
+            f"Error: Text content not found for {virtual_path}. "
+            "It may not have been extracted properly during cold start."
+        )
+
     try:
-        content = Path(text_path).read_text(encoding="utf-8")
-        return content
+        return Path(text_path).read_text(encoding="utf-8")
     except Exception as e:
+        logger.error("Failed reading document text at %s: %s", text_path, e)
         return f"Error reading document text: {e}"
 
+
 @mcp.tool()
-def get_documents(virtual_paths: List[str]) -> str:
-    """Batch retrieve text for multiple documents."""
+def get_documents(
+    virtual_paths: List[str],
+    scope: Literal["global", "project"] = "global",
+) -> str:
+    """Batch retrieve full text for multiple documents."""
     results = []
     for vp in virtual_paths:
-        res = get_document(vp)
-        results.append(f"--- Document: {vp} ---\n{res}\n")
+        res = get_document(vp, scope=scope)
+        results.append(f"--- Document: {vp} ({scope}) ---\n{res}\n")
     return "\n".join(results)
 
+
 @mcp.tool()
-def search_library(query: str) -> str:
+def search_library(
+    query: str,
+    scope: Literal["all", "global", "project"] = "all",
+) -> str:
     """
-    Instantly searches the entire local virtual library for documents, books, or directories 
-    matching the given keyword query. The search is case-insensitive and matches against 
-    the file name, DOI, and the LLM-generated summaries of every item.
-    
-    Use this tool FIRST before deciding to fetch a paper from the web. By searching 
-    for keywords related to the paper (e.g., 'attention is all you need transformer'), 
-    you can discover if the paper was already ingested under a different file name, 
+    Instantly searches the local virtual library (both Global and Project-Local by default
+    when `scope="all"`) for documents, books, or directories matching the keyword query.
+    The search is case-insensitive and matches against the file name, DOI, and the
+    LLM-generated summaries of every item.
+
+    Use this tool FIRST before deciding to fetch a paper from the web. By searching
+    for keywords related to the paper (e.g., 'attention is all you need transformer'),
+    you can discover if the paper was already ingested under a different file name,
     thus preventing duplicate downloads.
-    
-    Returns a formatted list of matches containing their virtual path, type, and summary.
+
+    Returns a formatted list of matches containing their scope, virtual path, type, and summary.
     """
-    manager = get_manager()
-    results = manager.search_library(query)
-    
-    if not results:
-        return f"No local documents found matching query: '{query}'"
-        
+    try:
+        managers = _iter_managers(scope)
+    except FileNotFoundError as e:
+        return f"Error: {e}"
+
     formatted = []
-    for r in results:
-        vpath = r.get("virtual_path", "unknown")
-        rtype = r.get("type", "unknown")
-        name = r.get("name", "unknown")
-        summary = r.get("summary", "")
-        formatted.append(f"Match Found [{rtype}]: '{name}'\nPath: {vpath}\nSummary: {summary}\n---")
-        
+    for label, manager in managers:
+        results = manager.search_library(query)
+        for r in results:
+            vpath = r.get("virtual_path", "unknown")
+            rtype = r.get("type", "unknown")
+            name = r.get("name", "unknown")
+            summary = r.get("summary", "")
+            formatted.append(
+                f"Match Found [{label}] [{rtype}]: '{name}'\n"
+                f"Path: {vpath}\n"
+                f"Summary: {summary}\n---"
+            )
+
+    if not formatted:
+        return f"No local documents found matching query: '{query}'"
+
     return "\n".join(formatted)
 
+
+@mcp.tool()
+def get_document_real_path(
+    virtual_path: str,
+    scope: Literal["global", "project"] = "global",
+) -> str:
+    """
+    Returns the underlying filesystem path (`real_path`) of a document or book in the VTree
+    so the user can open the original PDF directly in their viewer.
+    """
+    try:
+        manager = get_manager() if scope == "global" else get_manager("project")
+    except FileNotFoundError as e:
+        return f"Error: {e}"
+
+    node = manager._get_node(virtual_path)
+    if not node:
+        return f"Error: Path '{virtual_path}' not found in {scope} VTree."
+    real_path = node.get("real_path")
+    if not real_path:
+        return f"Error: '{virtual_path}' does not have an associated filesystem file."
+    return f"Real path for '{virtual_path}' [{scope}]: {real_path}"
+
+
+def main() -> None:
+    logger.info("Starting DocumentTools MCP server (active project: %s)", settings.get_active_project_id())
+    mcp.run()
+
+
+if __name__ == "__main__":
+    main()

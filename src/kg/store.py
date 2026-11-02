@@ -1,20 +1,20 @@
 """
-Temporal Knowledge Graph store (synchronous SQLite).
+Temporal Knowledge Graph store (synchronous SQLite) with Global vs. Project scope separation.
 
-Temporal semantics
-------------------
+Temporal & Scope semantics
+--------------------------
+* Every triplet has ``scope`` in ``('global', 'project')`` and an optional
+  ``project_id`` (NULL for global facts; the workspace identifier for project facts).
 * A triplet is **live** when ``is_active = 1`` AND it has not passed its
   ``expires_at``. Every read path filters on liveness, so an expired fact is
   invisible immediately — even before the reaper runs.
-* ``reap_expired`` is housekeeping: it soft-deletes expired facts
-  (``is_active = 0``, ``invalidated_reason = 'expired'``) so the partial
-  indexes stay small and the history records *why* a fact disappeared.
-* Re-asserting an existing live fact refreshes it (confidence, context,
-  ``updated_at``, TTL) instead of inserting a duplicate.
+* Queries default to ``scope='all'``, which returns all live ``global`` facts
+  PLUS the live ``project`` facts belonging to the active ``project_id`` —
+  automatically isolating unrelated projects' local facts.
+* Re-asserting an existing live fact within the same ``(scope, project_id)``
+  refreshes it (confidence, context, ``updated_at``, TTL) instead of inserting
+  a duplicate.
 * Retraction is a soft delete with a reason, never a hard delete.
-
-All times are UTC and are produced by an injectable ``now_fn`` so that TTL
-behaviour is deterministic under test.
 """
 
 import json
@@ -23,9 +23,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from config.settings import get_active_project_id, get_logger
 from src.db.connection import connect
 from src.db.migrations import init_db
 from src.kg.models import Entity, OntologyClass, OntologyRelation, Triplet
+from src.kg.schema import VALID_SCOPES
+
+logger = get_logger(__name__)
 
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
 
@@ -46,13 +50,19 @@ def _utcnow() -> datetime:
 
 
 class KGError(ValueError):
-    """Raised for invalid KG operations (unknown ontology terms, domain violations, ...)."""
+    """Raised for invalid KG operations (unknown ontology terms, domain/scope violations, ...)."""
 
 
 class KGStore:
-    def __init__(self, db_path: str | Path, now_fn: Callable[[], datetime] = _utcnow):
+    def __init__(
+        self,
+        db_path: str | Path,
+        now_fn: Callable[[], datetime] = _utcnow,
+        default_project_id: Optional[str] = None,
+    ):
         self.db_path = Path(db_path)
         self._now_fn = now_fn
+        self.default_project_id = default_project_id
         init_db(self.db_path)
 
     # ------------------------------------------------------------------ #
@@ -60,6 +70,40 @@ class KGStore:
     # ------------------------------------------------------------------ #
     def now(self) -> str:
         return self._now_fn().astimezone(timezone.utc).strftime(TIME_FMT)
+
+    def resolve_project_id(self, project_id: Optional[str] = None) -> str:
+        pid = (project_id or self.default_project_id or get_active_project_id()).strip()
+        if not pid:
+            raise KGError("Could not determine an active project_id for project-scoped KG operation.")
+        return pid
+
+    def _resolve_write_scope(self, scope: str, project_id: Optional[str] = None) -> tuple[str, Optional[str]]:
+        s = (scope or "global").strip().lower()
+        if s not in VALID_SCOPES:
+            raise KGError(f"Invalid scope '{scope}'. Must be 'global' or 'project'.")
+        if s == "global":
+            return "global", None
+        return "project", self.resolve_project_id(project_id)
+
+    def _scope_filter_clause(
+        self, scope: str = "all", project_id: Optional[str] = None, alias: str = "t"
+    ) -> tuple[str, list[Any]]:
+        s = (scope or "all").strip().lower()
+        if s not in ("all", "global", "project"):
+            raise KGError(f"Invalid query scope '{scope}'. Must be 'all', 'global', or 'project'.")
+        if s == "global":
+            return f"{alias}.scope = 'global'", []
+
+        pid = self.resolve_project_id(project_id)
+        if s == "project":
+            if pid == "*":
+                return f"{alias}.scope = 'project'", []
+            return f"({alias}.scope = 'project' AND {alias}.project_id = ?)", [pid]
+
+        # s == "all"
+        if pid == "*":
+            return "1 = 1", []
+        return f"({alias}.scope = 'global' OR ({alias}.scope = 'project' AND {alias}.project_id = ?))", [pid]
 
     def _expiry(self, ttl_seconds: Optional[int]) -> Optional[str]:
         if ttl_seconds is None:
@@ -71,6 +115,7 @@ class KGStore:
 
     @staticmethod
     def _row_to_triplet(row) -> Triplet:
+        keys = row.keys()
         return Triplet(
             id=row["id"],
             subject=row["subject"],
@@ -78,6 +123,8 @@ class KGStore:
             relation=row["relation"],
             object=row["object"],
             object_class=row["object_class"],
+            scope=row["scope"] if "scope" in keys and row["scope"] else "global",
+            project_id=row["project_id"] if "project_id" in keys else None,
             confidence=row["confidence"],
             source_chat=row["source_chat"],
             context=row["context"],
@@ -156,6 +203,8 @@ class KGStore:
             row = conn.execute(
                 "SELECT name, description, created_by FROM ontology_classes WHERE name = ?", (name,)
             ).fetchone()
+        if created:
+            logger.info("Added ontology class '%s' (by %s)", row["name"], created_by)
         return OntologyClass(**dict(row)), created
 
     def add_relation(
@@ -183,6 +232,14 @@ class KGStore:
                 "SELECT name, domain, range, description, created_by FROM ontology_relations WHERE name = ?",
                 (name,),
             ).fetchone()
+        if created:
+            logger.info(
+                "Added ontology relation '%s' (%s -> %s, by %s)",
+                row["name"],
+                domain_c or "Any",
+                range_c or "Any",
+                created_by,
+            )
         return OntologyRelation(**dict(row)), created
 
     # ------------------------------------------------------------------ #
@@ -257,15 +314,18 @@ class KGStore:
         source_chat: Optional[str] = None,
         subject_properties: Optional[dict] = None,
         object_properties: Optional[dict] = None,
+        scope: str = "global",
+        project_id: Optional[str] = None,
     ) -> tuple[Triplet, bool]:
         """
-        Assert a fact. Returns (triplet, created).
+        Assert a fact in either the 'global' or 'project' scope. Returns (triplet, created).
 
-        If an identical live (subject, relation, object) fact already exists it
-        is refreshed in place and ``created`` is False.
+        If an identical live (subject, relation, object) fact already exists in the
+        same (scope, project_id) it is refreshed in place and ``created`` is False.
         """
         if not 0.0 <= confidence <= 1.0:
             raise KGError("confidence must be between 0.0 and 1.0.")
+        resolved_scope, resolved_pid = self._resolve_write_scope(scope, project_id)
         expires_at = self._expiry(ttl_seconds)
         now = self.now()
 
@@ -288,8 +348,9 @@ class KGStore:
 
             live_sql, live_params = self._live_clause("t")
             existing = conn.execute(
-                f"SELECT id FROM triplets t WHERE subject_id = ? AND relation = ? AND object_id = ? AND {live_sql}",
-                [s_id, rel["name"], o_id, *live_params],
+                f"SELECT id FROM triplets t WHERE subject_id = ? AND relation = ? AND object_id = ? "
+                f"AND scope = ? AND COALESCE(project_id, '') = ? AND {live_sql}",
+                [s_id, rel["name"], o_id, resolved_scope, resolved_pid or "", *live_params],
             ).fetchone()
 
             if existing:
@@ -303,15 +364,40 @@ class KGStore:
                 created = False
             else:
                 cur = conn.execute(
-                    "INSERT INTO triplets (subject_id, relation, object_id, confidence, source_chat, context, "
-                    "created_at, updated_at, ttl_seconds, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (s_id, rel["name"], o_id, confidence, source_chat, context, now, now, ttl_seconds, expires_at),
+                    "INSERT INTO triplets (subject_id, relation, object_id, scope, project_id, confidence, "
+                    "source_chat, context, created_at, updated_at, ttl_seconds, expires_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        s_id,
+                        rel["name"],
+                        o_id,
+                        resolved_scope,
+                        resolved_pid,
+                        confidence,
+                        source_chat,
+                        context,
+                        now,
+                        now,
+                        ttl_seconds,
+                        expires_at,
+                    ),
                 )
                 tid = cur.lastrowid
                 created = True
 
             row = conn.execute(_TRIPLET_SELECT + " WHERE t.id = ?", (tid,)).fetchone()
-        return self._row_to_triplet(row), created
+
+        triplet = self._row_to_triplet(row)
+        logger.info(
+            "%s triplet #%d %s: %s --%s--> %s",
+            "Created" if created else "Refreshed",
+            triplet.id,
+            triplet.scope_tag(),
+            triplet.subject,
+            triplet.relation,
+            triplet.object,
+        )
+        return triplet, created
 
     def get_triplet(self, triplet_id: int) -> Optional[Triplet]:
         with connect(self.db_path) as conn:
@@ -324,10 +410,13 @@ class KGStore:
         confidence: Optional[float] = None,
         context: Optional[str] = None,
         ttl_seconds: Any = _UNSET,
+        scope: Optional[str] = None,
+        project_id: Optional[str] = None,
     ) -> Triplet:
         """
-        Update a live triplet. ``ttl_seconds`` semantics:
-        omitted -> unchanged, ``None`` -> make permanent, int -> new TTL counted from now.
+        Update a live triplet.
+        - ``ttl_seconds``: omitted -> unchanged, ``None`` -> make permanent, int -> new TTL counted from now.
+        - ``scope``: 'global' or 'project' to promote a project fact to global or restrict a global fact to a project.
         """
         existing = self.get_triplet(triplet_id)
         if existing is None:
@@ -347,10 +436,16 @@ class KGStore:
         if ttl_seconds is not _UNSET:
             sets += ["ttl_seconds = ?", "expires_at = ?"]
             params += [ttl_seconds, self._expiry(ttl_seconds)]
+        if scope is not None:
+            new_scope, new_pid = self._resolve_write_scope(scope, project_id or existing.project_id)
+            sets += ["scope = ?", "project_id = ?"]
+            params += [new_scope, new_pid]
 
         with connect(self.db_path) as conn:
             conn.execute(f"UPDATE triplets SET {', '.join(sets)} WHERE id = ?", [*params, triplet_id])
-        return self.get_triplet(triplet_id)
+        updated = self.get_triplet(triplet_id)
+        logger.info("Updated triplet #%d (%s)", triplet_id, updated.scope_tag())
+        return updated
 
     def retract_triplet(self, triplet_id: int, reason: str) -> Triplet:
         """Soft-delete a fact, keeping it in history with the given reason."""
@@ -364,7 +459,9 @@ class KGStore:
                 "UPDATE triplets SET is_active = 0, invalidated_reason = ?, updated_at = ? WHERE id = ?",
                 (reason or "retracted", self.now(), triplet_id),
             )
-        return self.get_triplet(triplet_id)
+        retracted = self.get_triplet(triplet_id)
+        logger.info("Retracted triplet #%d (reason: %s)", triplet_id, reason)
+        return retracted
 
     def query(
         self,
@@ -375,10 +472,19 @@ class KGStore:
         object_class: Optional[str] = None,
         active_only: bool = True,
         min_confidence: float = 0.0,
+        scope: str = "all",
+        project_id: Optional[str] = None,
         limit: int = 50,
     ) -> list[Triplet]:
-        """Pattern match on triplets. Name filters are case-insensitive exact matches."""
+        """
+        Pattern match on triplets. Name filters are case-insensitive exact matches.
+        ``scope`` may be 'all' (global + active project), 'global', or 'project'.
+        """
         where, params = [], []
+        scope_sql, scope_params = self._scope_filter_clause(scope, project_id, alias="t")
+        where.append(scope_sql)
+        params.extend(scope_params)
+
         if subject:
             where.append("s.name = ?")
             params.append(subject.strip())
@@ -421,20 +527,30 @@ class KGStore:
                 "WHERE is_active = 1 AND expires_at IS NOT NULL AND expires_at <= ?",
                 (now, now),
             )
-            return cur.rowcount
+            count = cur.rowcount
+        if count:
+            logger.info("Reaped %d expired triplet(s)", count)
+        return count
 
     def neighbourhood(
-        self, entity: str, entity_class: Optional[str] = None, depth: int = 1, limit: int = 100
+        self,
+        entity: str,
+        entity_class: Optional[str] = None,
+        depth: int = 1,
+        scope: str = "all",
+        project_id: Optional[str] = None,
+        limit: int = 100,
     ) -> list[Triplet]:
         """
         Breadth-first walk over live triplets in both directions starting at
-        ``entity``. Returns the edges discovered within ``depth`` hops.
+        ``entity``, filtered by ``scope`` ('all' = global + current project).
         """
         start = self.get_entity(entity, entity_class)
         if start is None:
             return []
 
         live_sql, live_params = self._live_clause("t")
+        scope_sql, scope_params = self._scope_filter_clause(scope, project_id, alias="t")
         seen_nodes, seen_edges = {start.id}, {}
         frontier = deque([(start.id, 0)])
 
@@ -444,8 +560,9 @@ class KGStore:
                 if d >= depth:
                     continue
                 rows = conn.execute(
-                    _TRIPLET_SELECT + f" WHERE (t.subject_id = ? OR t.object_id = ?) AND {live_sql}",
-                    [node_id, node_id, *live_params],
+                    _TRIPLET_SELECT
+                    + f" WHERE (t.subject_id = ? OR t.object_id = ?) AND {scope_sql} AND {live_sql}",
+                    [node_id, node_id, *scope_params, *live_params],
                 ).fetchall()
                 for row in rows:
                     if row["id"] not in seen_edges:
@@ -455,4 +572,3 @@ class KGStore:
                             seen_nodes.add(nxt)
                             frontier.append((nxt, d + 1))
         return list(seen_edges.values())[:limit]
-

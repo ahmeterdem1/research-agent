@@ -1,6 +1,6 @@
 """Pydantic models for the temporal Knowledge Graph."""
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -35,6 +35,8 @@ class Triplet(BaseModel):
     relation: str
     object: str
     object_class: str
+    scope: Literal["global", "project"] = "global"
+    project_id: Optional[str] = None
     confidence: float = 1.0
     source_chat: Optional[str] = None
     context: Optional[str] = None
@@ -45,10 +47,16 @@ class Triplet(BaseModel):
     is_active: bool = True
     invalidated_reason: Optional[str] = None
 
+    def scope_tag(self) -> str:
+        """Human- and LLM-readable badge indicating whether this fact is global or project-local."""
+        if self.scope == "project":
+            return f"[PROJECT: {self.project_id or 'unknown'}]"
+        return "[GLOBAL]"
+
     def to_line(self) -> str:
         """Compact single-line rendering, used in LLM-facing tool output."""
         line = (
-            f"[#{self.id}] {self.subject} ({self.subject_class}) "
+            f"[#{self.id}] {self.scope_tag()} {self.subject} ({self.subject_class}) "
             f"--{self.relation}--> {self.object} ({self.object_class}) "
             f"| confidence={self.confidence:.2f}"
         )
@@ -59,4 +67,3 @@ class Triplet(BaseModel):
         if self.context:
             line += f" | context: {self.context}"
         return line
-

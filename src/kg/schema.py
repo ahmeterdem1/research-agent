@@ -1,24 +1,26 @@
 """
 SQLite schema and base ontology for the temporal Knowledge Graph.
 
-The KG lives in the shared project database (``settings.DB_PATH``) next to
-chat history and usage tables (those are added in Phase 6).
-
 Design notes:
 - Entity and ontology names use ``COLLATE NOCASE`` so that the LLM writing
   "Reinforcement Learning" and "reinforcement learning" hits the same row.
+- Triplets carry an explicit ``scope`` ('global' or 'project') and an optional
+  ``project_id`` (NULL when scope='global'; the active workspace identifier
+  when scope='project'). This lets the agent separate permanent, cross-project
+  facts about the user from local project-specific hypotheses and preferences.
 - Triplets are never hard-deleted. Retraction and TTL expiry flip
-  ``is_active`` to 0 and record ``invalidated_reason``, which preserves the
-  temporal history of what the agent believed and when.
+  ``is_active`` to 0 and record ``invalidated_reason``, preserving history.
 - All timestamps are UTC strings in SQLite's native ``YYYY-MM-DD HH:MM:SS``
   format so they compare correctly as text.
 """
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Canonical name of the single human user of this local-first app.
 USER_ENTITY_NAME = "User"
 USER_CLASS_NAME = "User"
+
+VALID_SCOPES = ("global", "project")
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS ontology_classes (
@@ -54,6 +56,8 @@ CREATE TABLE IF NOT EXISTS triplets (
     subject_id         INTEGER NOT NULL REFERENCES entities(id),
     relation           TEXT NOT NULL REFERENCES ontology_relations(name),
     object_id          INTEGER NOT NULL REFERENCES entities(id),
+    scope              TEXT NOT NULL DEFAULT 'global' CHECK (scope IN ('global', 'project')),
+    project_id         TEXT,                          -- NULL when scope='global'; project identifier when scope='project'
     confidence         REAL NOT NULL DEFAULT 1.0,
     source_chat        TEXT,                          -- session UUID that produced the fact
     context            TEXT,                          -- rationale / quote
@@ -68,6 +72,7 @@ CREATE TABLE IF NOT EXISTS triplets (
 CREATE INDEX IF NOT EXISTS idx_triplets_subject  ON triplets(subject_id) WHERE is_active = 1;
 CREATE INDEX IF NOT EXISTS idx_triplets_object   ON triplets(object_id)  WHERE is_active = 1;
 CREATE INDEX IF NOT EXISTS idx_triplets_relation ON triplets(relation)   WHERE is_active = 1;
+CREATE INDEX IF NOT EXISTS idx_triplets_scope    ON triplets(scope, project_id) WHERE is_active = 1;
 CREATE INDEX IF NOT EXISTS idx_triplets_expires  ON triplets(expires_at)
     WHERE expires_at IS NOT NULL AND is_active = 1;
 """
@@ -98,4 +103,3 @@ BASE_RELATIONS: list[tuple[str, str | None, str | None, str]] = [
     ("contradicts", "Argument", "Argument", "The two arguments conflict with each other."),
     ("corrected_by", "Mistake", "Argument", "The mistake was resolved by this valid insight."),
 ]
-
