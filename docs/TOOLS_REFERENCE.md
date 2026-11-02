@@ -176,18 +176,18 @@ def stage_paper(
     target_virtual_dir: str,
     target_scope: Literal["global", "project"] = "global",
     title: Optional[str] = None,
+    doi: Optional[str] = None,
     preextracted_text: Optional[str] = None,
-    precomputed_summary: Optional[str] = None,
 ) -> str
 ```
-* **Purpose**: Phase 1 of saving a paper. Generates a UUID `temp_id`, caches any extracted text in `~/.research-agent/cache/texts/<sha256>.md`, and writes a persistent staging manifest to `~/.research-agent/cache/staged/<temp_id>.json`.
+* **Purpose**: Phase 1 of saving a paper. Runs a **4-Tier Content & PDF Resolution Cascade** (1. Direct arXiv PDF, 2. Academic API lookup via arXiv Search / OpenAlex / Semantic Scholar by `title` or `doi`, 3. Direct HTTP PDF / `<meta name="citation_pdf_url">`, 4. Structured Metadata + Abstract + TLDR fallback when behind a captcha/paywall), caches the extracted Markdown in `~/.research-agent/cache/texts/<sha256>.md`, stages any downloaded PDF in `~/.research-agent/cache/staged/<temp_id>.pdf`, and summarizes the document using `summarize_text()` (`DEFAULT_SUMMARIZATION_MODEL` on OpenRouter).
 * **Parameters**:
-  * `url_or_arxiv_id`: Source URL or arXiv ID.
-  * `target_virtual_dir`: Destination directory in the VTree (e.g. `"/Reinforcement Learning/Offline RL"`). Intermediate directories are created automatically on confirmation.
+  * `url_or_arxiv_id`: Source URL, arXiv ID (e.g. `"2601.18533"`), or DOI.
+  * `target_virtual_dir`: Destination directory in the VTree (e.g. `"/nlp/RLHF/RLVRR"`). Intermediate directories are created automatically on confirmation.
   * `target_scope`: `"global"` (default — targets `~/.research-agent/vtrees/global.json`) or `"project"` (targets `<project>/.opencode/vtree.json`).
-  * `title`: Clean display title for the VTree node.
-  * `preextracted_text` / `precomputed_summary`: Optional text and summary if the agent already read the paper in the current turn.
-* **Returns**: Staging confirmation with `ID: <temp_id>`, target scope/path, summary, and the instruction to **STOP EXECUTION NOW** and ask the user for approval.
+  * `title`: Clean paper title (strongly recommended when `url_or_arxiv_id` is a conference landing page like `iclr.cc` or `openreview.net` so Tier 2 can locate the open-access PDF).
+  * `doi`: Optional DOI of the paper.
+* **Returns**: Staging confirmation with `ID: <temp_id>`, resolution tier, target scope/path, the OpenRouter-generated summary, and the instruction to **STOP EXECUTION NOW** and ask the user for approval.
 
 ### 3.2 `confirm_save_paper`
 ```python
@@ -196,9 +196,27 @@ def confirm_save_paper(temp_id: str) -> str
 * **Purpose**: Phase 2 of saving a paper. Protected by `"ra_ingest_confirm_save_paper": "ask"` in OpenCode's permission engine.
 * **Behavior**:
   1. Pops the staged manifest from `~/.research-agent/cache/staged/<temp_id>.json`.
-  2. Loads (or initializes) the target `vtree.json` (`global` or `project`).
-  3. Inserts the `VDocument` node into `target_virtual_dir` via `VTreeManager.add_document()` and marks all ancestor directories with `_needs_summary_update = True`.
+  2. Moves any staged PDF (`~/.research-agent/cache/staged/<temp_id>.pdf`) into a single flat folder at `<library_root>/Downloaded/<title>.pdf` and points `real_path` to that file.
+  3. Loads (or initializes) the target `vtree.json` (`global` or `project`), inserts the `VDocument` node into `target_virtual_dir`, and refreshes all newly created or modified ancestor directory summaries via OpenRouter (`summarize_directory()`).
   4. Atomically writes the updated `vtree.json` to disk.
+
+### 3.3 `refresh_library`
+```python
+def refresh_library(
+    scope: Literal["global", "project"] = "global",
+    library_path: Optional[str] = None,
+    target_virtual_dir: Optional[str] = None,
+    update_dir_summaries: bool = True,
+) -> str
+```
+* **Purpose**: Incrementally scans the source library folder on disk and indexes **only newly dropped** PDF, TXT, MD, or DOCX files that are not yet present in the target VTree (`global` or `project`).
+* **Preserves Existing Organization**: Checks all existing `document` and `book` nodes by `real_path` across the entire `vtree.json`—even if those nodes were previously moved into semantic virtual folders by `organize_vtree` or `mv`. Already-indexed files are skipped; existing nodes and folders are untouched.
+* **Parameters**:
+  * `scope`: `"global"` (default — updates `~/.research-agent/vtrees/global.json`) or `"project"` (updates `<project>/.opencode/vtree.json`).
+  * `library_path`: Optional directory on disk to scan. Defaults to the `library_root` stored inside `vtree.json` (or `LIBRARY_ROOT_PATH`).
+  * `target_virtual_dir`: Optional destination folder in the VTree for newly discovered files (e.g. `"/Inbox"`). If omitted, mirrors their relative subfolder path under `library_root`.
+  * `update_dir_summaries`: Recomputes summaries for ancestor directories modified by newly added nodes (default `True`).
+* **Returns**: A summary report with total scanned, already-indexed (skipped), and newly added documents along with their virtual paths and summaries.
 
 ---
 

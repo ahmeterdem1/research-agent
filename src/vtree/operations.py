@@ -69,6 +69,10 @@ class VTreeManager:
         prefix = "" if target_dir_vpath.rstrip("/") == "" else target_dir_vpath.rstrip("/")
         full_vpath = f"{prefix}/{name}"
         doc_node = {**doc_node, "type": doc_node.get("type", "document"), "virtual_path": full_vpath}
+        if "children" in doc_node and isinstance(doc_node["children"], list):
+            doc_node["children"] = [
+                {**c, "virtual_path": f"{full_vpath}/{c['name']}"} for c in doc_node["children"]
+            ]
 
         if "children" not in dir_node:
             dir_node["children"] = []

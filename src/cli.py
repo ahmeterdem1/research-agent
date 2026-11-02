@@ -41,6 +41,7 @@ DEFAULT_PERMISSIONS = {
     "ra_search_*": "allow",
     "ra_kg_*": "allow",
     "ra_ingest_stage_paper": "allow",
+    "ra_ingest_refresh_library": "allow",
     "ra_ingest_confirm_save_paper": "ask",
 }
 
@@ -158,11 +159,12 @@ def install_opencode(
     mcp_block = cfg.setdefault("mcp", {})
     for server_key, binary_name in MCP_SERVERS.items():
         existing = mcp_block.get(server_key, {})
+        enabled_val = True if enable_by_default else existing.get("enabled", False)
         mcp_block[server_key] = {
             **existing,
             "type": "local",
             "command": [binary_name],
-            "enabled": existing.get("enabled", enable_by_default),
+            "enabled": enabled_val,
         }
 
     perm_block = cfg.setdefault("permission", {})
@@ -250,6 +252,8 @@ def configure_project(
 
     for server_key, enabled_val in toggles.items():
         entry = mcp_block.setdefault(server_key, {})
+        entry.setdefault("type", "local")
+        entry.setdefault("command", [MCP_SERVERS[server_key]])
         entry["enabled"] = bool(enabled_val)
 
     if project_id:
@@ -343,6 +347,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     p_install.add_argument(
         "--enable-by-default",
+        "--enable-globally",
+        dest="enable_by_default",
         action="store_true",
         help="Enable ra_* MCP servers globally by default (otherwise disabled until enabled per project)",
     )
@@ -383,7 +389,43 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_index.add_argument("--overwrite", action="store_true", help="Rebuild from scratch")
     p_index.add_argument("--skip-organize", action="store_true", help="Skip LLM reorganization pass")
 
-    # 4. organize
+    # 4. refresh
+    p_refresh = sub.add_parser(
+        "refresh",
+        help="Incrementally scan the source folder and index only newly dropped files into an existing VTree",
+    )
+    p_refresh.add_argument(
+        "--library-path",
+        type=str,
+        default=None,
+        help="Source library directory (defaults to library_root recorded in VTree or LIBRARY_ROOT_PATH)",
+    )
+    p_refresh.add_argument(
+        "--scope",
+        choices=["global", "project"],
+        default="global",
+        help="Target VTree scope ('global' or 'project')",
+    )
+    p_refresh.add_argument("--vtree-path", type=str, default=None, help="Explicit vtree.json path")
+    p_refresh.add_argument(
+        "--target-dir",
+        type=str,
+        default=None,
+        help="Optional virtual folder in VTree to place newly discovered files (e.g. '/Inbox')",
+    )
+    p_refresh.add_argument("--book-threshold", type=int, default=settings.BOOK_PAGE_THRESHOLD)
+    p_refresh.add_argument(
+        "--no-dir-summaries",
+        action="store_true",
+        help="Skip refreshing ancestor directory summaries with the LLM",
+    )
+    p_refresh.add_argument(
+        "--organize",
+        action="store_true",
+        help="Run the LLM semantic reorganization pass after inserting new files",
+    )
+
+    # 5. organize
     p_org = sub.add_parser("organize", help="Run the LLM reorganization pass on an existing VTree")
     p_org.add_argument("--scope", choices=["global", "project"], default="global")
     p_org.add_argument("--vtree-path", type=str, default=None)
@@ -451,6 +493,35 @@ def main(argv: Optional[list[str]] = None) -> int:
                 skip_organize=args.skip_organize,
             )
             print(f"Indexed library into VTree: {out}")
+            return 0
+        except ValueError as e:
+            logger.error("%s", e)
+            return 1
+
+    if args.command == "refresh":
+        from src.cold_start.refresher import refresh_vtree
+
+        try:
+            res = refresh_vtree(
+                scope=args.scope,
+                library_path=args.library_path,
+                vtree_path=args.vtree_path,
+                target_virtual_dir=args.target_dir,
+                book_threshold=args.book_threshold,
+                update_dir_summaries=not args.no_dir_summaries,
+                reorganize=args.organize,
+            )
+            print(
+                f"Refreshed VTree [{res.scope}] ({res.vtree_path}):\n"
+                f"  Scanned: {res.scanned_count} | Already indexed: {res.already_indexed_count} | "
+                f"Newly added: {len(res.added_nodes)} | Repaired: {len(res.repaired_nodes)}"
+            )
+            for node in res.added_nodes:
+                print(f"  + [{node.get('type', 'document')}] {node.get('virtual_path')}")
+            for node in res.repaired_nodes:
+                print(f"  ~ [repaired] {node.get('virtual_path')}")
+            if res.failed_files:
+                print(f"  ! Failed/skipped ({len(res.failed_files)}): {', '.join(res.failed_files)}")
             return 0
         except ValueError as e:
             logger.error("%s", e)

@@ -191,14 +191,28 @@ def get_document(
         return f"Error: '{virtual_path}' is not a document."
 
     text_path = node.get("text_path")
-    if not text_path or not Path(text_path).exists():
+    resolved_text_path: Optional[Path] = None
+    if text_path:
+        candidate = Path(text_path)
+        if candidate.exists():
+            resolved_text_path = candidate
+        else:
+            fallback = settings.CACHE_DIR / "texts" / candidate.name
+            if fallback.exists():
+                resolved_text_path = fallback
+    if resolved_text_path is None and node.get("text_hash"):
+        hash_candidate = settings.CACHE_DIR / "texts" / f"{node['text_hash']}.md"
+        if hash_candidate.exists():
+            resolved_text_path = hash_candidate
+
+    if resolved_text_path is None:
         return (
             f"Error: Text content not found for {virtual_path}. "
             "It may not have been extracted properly during cold start."
         )
 
     try:
-        return Path(text_path).read_text(encoding="utf-8")
+        return resolved_text_path.read_text(encoding="utf-8")
     except Exception as e:
         logger.error("Failed reading document text at %s: %s", text_path, e)
         return f"Error reading document text: {e}"

@@ -145,3 +145,35 @@ def test_status_reports_vtree_and_dual_scope_kg(monkeypatch, tmp_path, capsys):
     assert "ra_docs   : enabled" in out
     assert "ra_kg     : enabled" in out
 
+
+def test_cli_refresh_command_adds_new_files_to_target_dir(monkeypatch, tmp_path, capsys):
+    from src.cold_start import refresher
+
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    cache_dir = tmp_path / "cache"
+    vtree_path = tmp_path / "vtree.json"
+
+    monkeypatch.setattr(settings, "CACHE_DIR", cache_dir)
+    monkeypatch.setattr(refresher, "summarize_text", lambda txt: "CLI refresh summary")
+    monkeypatch.setattr(refresher, "summarize_directory", lambda sums: "Updated dir summary")
+
+    (lib_dir / "DroppedNote.md").write_text("# Fresh Note\nTesting CLI refresh.", encoding="utf-8")
+
+    rc = cli.main(
+        [
+            "refresh",
+            "--library-path",
+            str(lib_dir),
+            "--vtree-path",
+            str(vtree_path),
+            "--target-dir",
+            "/Inbox",
+        ]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Scanned: 1 | Already indexed: 0 | Newly added: 1" in out
+    assert "/Inbox/DroppedNote" in out
+
+

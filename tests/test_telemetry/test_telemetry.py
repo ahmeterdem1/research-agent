@@ -47,7 +47,14 @@ def test_mcp_tools_automatically_log_telemetry_and_behavioral_diagnostics(tstore
     # 2. Stage a paper WITHOUT calling search_library first -> triggers local_first_compliant = False!
     file_tools._STAGED_PAPERS.clear()
     monkeypatch.setattr(settings, "STAGED_DIR", tmp_path / "staged")
-    file_tools.stage_paper("https://arxiv.org/abs/1706.03762", "/Transformers", target_scope="project")
+    monkeypatch.setattr(settings, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(file_tools, "summarize_text", lambda txt: "OpenRouter summary")
+    file_tools.stage_paper(
+        "https://arxiv.org/abs/1706.03762",
+        "/Transformers",
+        target_scope="project",
+        preextracted_text="# Attention Is All You Need",
+    )
 
     summary = tstore.get_summary()
     assert summary["total_calls"] == 3

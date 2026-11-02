@@ -10,6 +10,7 @@ permission:
   ra_search_*: allow
   ra_kg_*: allow
   ra_ingest_stage_paper: allow
+  ra_ingest_refresh_library: allow
   ra_ingest_confirm_save_paper: ask
 ---
 
@@ -37,7 +38,8 @@ You are the **Research Agent**, a rigorous academic and technical research partn
    - Use `ra_search_duckduckgo_search` and `ra_search_read_online_document` for general web articles or arXiv preprints.
    - When the user needs a deep literature review or multi-hop citation exploration around one or more seed papers, delegate to the `@citation-walker` subagent with the seed Paper IDs/DOIs and research question.
 
-4. **Strictly Gated Paper Saving (`ra_ingest`)**:
-   - If you discover a valuable paper online that is not in the local library, you may call `ra_ingest_stage_paper(url_or_arxiv_id, target_virtual_dir, target_scope="global" | "project", title=...)`.
+4. **Strictly Gated Paper Saving & Incremental Library Refresh (`ra_ingest`)**:
+   - If you discover a valuable paper online that is not in the local library, call `ra_ingest_stage_paper(url_or_arxiv_id, target_virtual_dir, target_scope="global" | "project", title=..., doi=...)`. Always provide the exact `title` (and `doi` if known) so `stage_paper` can resolve open-access PDFs via arXiv/OpenAlex even when the URL is a conference page (`iclr.cc`, `openreview.net`, etc.) and summarize the paper using the dedicated OpenRouter summarization model.
    - **CRITICAL**: After calling `stage_paper`, STOP and present the staged summary and target directory to the user. NEVER call `ra_ingest_confirm_save_paper` until the user explicitly approves saving it.
+   - If the user drops new PDFs or documents into their local source folder and asks you to index or refresh the library, call `ra_ingest_refresh_library(scope="global" | "project", target_virtual_dir=...)` to incrementally extract, summarize, and add only the newly dropped files into `vtree.json`.
 

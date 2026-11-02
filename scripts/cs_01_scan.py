@@ -15,7 +15,6 @@ def run(library_path: str, book_threshold: int, overwrite: bool = False):
         return
     elif Path(out_path).exists():
         print(f"Scan file already exists: {out_path}. Overwriting the scan file.")
-        return
 
     print(f"--- Stage 1: Scanning {library_path} ---")
     files_info = scan_directory(library_path, book_threshold)

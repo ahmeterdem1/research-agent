@@ -2,8 +2,6 @@ from pathlib import Path
 from dataclasses import dataclass
 import chardet
 from docx import Document as DocxDocument
-from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling.datamodel.pipeline_options import PdfPipelineOptions, AcceleratorOptions, AcceleratorDevice
 from litellm import completion
 from tenacity import retry, stop_after_attempt, wait_exponential
 import fitz
@@ -11,6 +9,9 @@ import base64
 import os
 
 from config import settings
+from config.settings import get_logger
+
+logger = get_logger(__name__)
 
 @dataclass
 class ExtractedContent:
@@ -35,10 +36,13 @@ def extract_content(file_path: str | Path) -> ExtractedContent | None:
 
 _converter_instance = None
 
-def get_converter() -> DocumentConverter:
+def get_converter():
     global _converter_instance
     if _converter_instance is None:
-        print("  [Docling] Loading models into memory (this only happens once)...")
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+        from docling.datamodel.pipeline_options import PdfPipelineOptions, AcceleratorOptions, AcceleratorDevice
+
+        logger.info("[Docling] Loading models into memory (this only happens once)...")
         # Explicitly configure GPU if DOCLING_DEVICE is set, else AUTO
         device_env = os.environ.get("DOCLING_DEVICE", "auto").lower()
         if device_env == "cuda":
@@ -47,16 +51,16 @@ def get_converter() -> DocumentConverter:
             accel_device = AcceleratorDevice.MPS
         else:
             accel_device = AcceleratorDevice.AUTO
-            
-        print(f"  [Docling] Using accelerator device: {accel_device}")
-        
+
+        logger.info("[Docling] Using accelerator device: %s", accel_device)
+
         pipeline_options = PdfPipelineOptions(
             accelerator_options=AcceleratorOptions(
                 device=accel_device,
                 num_threads=8
             )
         )
-        
+
         _converter_instance = DocumentConverter(
             format_options={
                 "pdf": PdfFormatOption(pipeline_options=pipeline_options)
@@ -79,7 +83,7 @@ def extract_pdf_llm(file_path: Path) -> ExtractedContent:
     """Extracts PDF text using a Multimodal LLM (Vision). Converts pages to images."""
     from config.prompts import get_prompts
     
-    print(f"  [LLM OCR] Extracting {file_path.name} via LLM Vision...")
+    logger.info("[LLM OCR] Extracting %s via LLM Vision...", file_path.name)
     text_parts = []
     
     prompts = get_prompts()
@@ -89,7 +93,7 @@ def extract_pdf_llm(file_path: Path) -> ExtractedContent:
     # Open PDF and render pages to images
     doc = fitz.open(file_path)
     for page_num in range(doc.page_count):
-        print(f"    -> Processing page {page_num + 1}/{doc.page_count}")
+        logger.info("Processing page %d/%d", page_num + 1, doc.page_count)
         page = doc.load_page(page_num)
         pix = page.get_pixmap(matrix=fitz.Matrix(2, 2)) # 2x resolution
         img_bytes = pix.tobytes("jpeg")

@@ -3,6 +3,10 @@ from pathlib import Path
 from dataclasses import dataclass
 import fitz  # PyMuPDF
 
+from config.settings import get_logger
+
+logger = get_logger(__name__)
+
 @dataclass
 class FileInfo:
     real_path: str
@@ -39,14 +43,14 @@ def scan_directory(root_path: str | Path, book_threshold: int = 30) -> list[File
                 try:
                     with fitz.open(file_path) as doc:
                         page_count = doc.page_count
-                        print(f"Scanned {file_path}: {page_count} pages.")
+                        logger.info("Scanned %s: %d pages.", file_path, page_count)
                         if page_count > book_threshold:
                             is_book = True
                             toc = doc.get_toc()
                             if len(toc) > 0:
                                 is_splittable = True
                 except Exception as e:
-                    print(f"Warning: Could not read {file_path}: {e}")
+                    logger.warning("Could not read %s: %s", file_path, e)
                     continue
             
             files.append(FileInfo(

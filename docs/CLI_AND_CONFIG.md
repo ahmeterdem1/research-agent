@@ -115,7 +115,21 @@ ra-cli index --library-path ./project_papers --scope project
 ra-cli index --library-path ~/Documents/Papers --scope global --overwrite --skip-organize
 ```
 
-### 3.4 `ra-cli organize`
+### 3.4 `ra-cli refresh`
+Incrementally scans your source folder on disk ([src/cold_start/refresher.py](file:///Users/ahmeterdem/Desktop/code/research%20agent/src/cold_start/refresher.py)), compares discovered files against `real_path` entries already in your `vtree.json`, extracts + summarizes **only** newly dropped files, and inserts them into the existing VTree without resetting custom virtual folders:
+
+```bash
+# Incrementally index newly dropped PDFs into the Global VTree (uses library_root from vtree.json)
+ra-cli refresh --scope global
+
+# Place all newly discovered files into a specific virtual directory (e.g. /Inbox)
+ra-cli refresh --scope global --target-dir /Inbox
+
+# Refresh a Project-Local VTree and run the LLM semantic organizer afterward
+ra-cli refresh --scope project --library-path ./project_papers --organize
+```
+
+### 3.5 `ra-cli organize`
 Runs Stage 5 (the LLM semantic reorganization pass) standalone on an existing Global or Project VTree:
 
 ```bash
@@ -123,7 +137,7 @@ ra-cli organize --scope global --max-turns 15
 ra-cli organize --scope project
 ```
 
-### 3.5 `ra-cli status`
+### 3.6 `ra-cli status`
 Displays a snapshot of your global data home, active `project_id`, Global and Project VTree document counts, active KG triplet counts (`global` vs. `project`), and current project MCP toggles:
 
 ```bash
@@ -131,7 +145,7 @@ ra-cli status
 ra-cli status --project-dir ~/code/my-project
 ```
 
-### 3.6 `ra-cli stats`
+### 3.7 `ra-cli stats`
 Displays the Research Agent's SQLite tool & subagent telemetry report (`tool_invocations` table in `~/.research-agent/research_agent.db`):
 * **Total calls, soft error count & error rate (%)**
 * **Average and maximum execution latency (`ms`)** per server and per tool

@@ -5,7 +5,7 @@ A local-first academic and technical research extension for **OpenCode** (`openc
 1. **Dual-Scope Virtual Document Tree (`ra_docs`)**: A decoupled semantic hierarchy (`vtree.json`) over your PDF/Markdown/DOCX textbooks and papers—supporting both a **PC-wide Global Library** (`~/.research-agent/vtrees/global.json`) and optional **Project-Local Libraries** (`<project>/.opencode/vtree.json`).
 2. **Academic & Web Literature Search (`ra_search`)**: Free DuckDuckGo web search, Semantic Scholar paper search & metadata, arXiv PDF extraction, and forward/backward citation graph edges.
 3. **Autonomous Citation Walker Subagent (`@citation-walker`)**: An OpenCode subagent running in an isolated context window that traverses backward references and forward citations over multiple hops and returns a curated bibliography.
-4. **User-Gated Paper Ingestion (`ra_ingest`)**: Two-phase staging (`stage_paper` -> `confirm_save_paper`) protected by OpenCode's native `"ask"` permission gate so no paper is ever saved to your library without your explicit confirmation.
+4. **User-Gated Paper Ingestion & Incremental Library Refresh (`ra_ingest`)**: Two-phase staging (`stage_paper` -> `confirm_save_paper`) protected by OpenCode's native `"ask"` permission gate so no paper is ever saved to your library without your explicit confirmation, plus `refresh_library` (`ra-cli refresh`) to incrementally index newly dropped local PDFs/documents into your existing `vtree.json` without losing semantic folder organization.
 5. **Dual-Scope Temporal Knowledge Graph (`ra_kg`)**: An embedded SQLite knowledge graph (`~/.research-agent/research_agent.db`) with TTL expiry, soft-retraction history, extendable ontology, and strict separation between **`[GLOBAL]` user facts** (background, `has_read` reading history, enduring interests, foundational mistakes) and **`[PROJECT: <id>]` workspace facts** (project-specific hypotheses, arguments, and tool preferences).
 6. **Tool & Subagent Telemetry (`ra-cli stats`)**: Automatic SQLite instrumentation recording call volume, soft error rates, latency (`ms`), scope distribution, and behavioral compliance checks across all MCP tools.
 
@@ -41,15 +41,19 @@ ra-cli install-opencode
 ```
 *(By default, the 4 MCP servers are registered with `"enabled": false` globally so unrelated coding projects have zero tool-schema overhead until you enable them in a project).*
 
-### 4. Index Your Research Library (Cold Start)
-Build your Global Virtual Tree (`~/.research-agent/vtrees/global.json`) or a Project-Local Virtual Tree (`.opencode/vtree.json`):
+### 4. Index or Incrementally Refresh Your Research Library
+Build your Global Virtual Tree (`~/.research-agent/vtrees/global.json`) or a Project-Local Virtual Tree (`.opencode/vtree.json`), or incrementally index newly dropped PDFs into an existing tree:
 
 ```bash
-# Build the PC-wide Global VTree
+# Build the PC-wide Global VTree (initial cold start)
 ra-cli index --library-path ~/Documents/Papers --scope global
 
 # Or build a Project-Local VTree inside the current project
 ra-cli index --library-path ./papers --scope project
+
+# Incrementally index ONLY newly dropped files into an existing VTree (preserves custom folders)
+ra-cli refresh --scope global
+ra-cli refresh --scope global --target-dir /Inbox
 ```
 
 ### 5. Enable Modules in Any OpenCode Project
@@ -93,8 +97,8 @@ ra-cli stats --all-projects --days 7 --recent 20
 
 ## Documentation Index
 
-* **[Complete MCP Tools & Subagents Reference (`docs/TOOLS_REFERENCE.md`)](file:///Users/ahmeterdem/Desktop/code/research%20agent/docs/TOOLS_REFERENCE.md)** — Detailed signatures, parameters, return formats, and behavioral rules for all 25 tools across `ra_docs`, `ra_search`, `ra_ingest`, `ra_kg`, and the cold-start organizer, plus the `researcher` and `@citation-walker` agent profiles.
-* **[CLI, Telemetry & Configuration Reference (`docs/CLI_AND_CONFIG.md`)](file:///Users/ahmeterdem/Desktop/code/research%20agent/docs/CLI_AND_CONFIG.md)** — Complete guide to `ra-cli` commands, environment variables, `.env` precedence, OpenCode configuration merging, and the cold-start pipeline stages.
+* **[Complete MCP Tools & Subagents Reference (`docs/TOOLS_REFERENCE.md`)](./docs/TOOLS_REFERENCE.md)** — Detailed signatures, parameters, return formats, and behavioral rules for all 25 tools across `ra_docs`, `ra_search`, `ra_ingest`, `ra_kg`, and the cold-start organizer, plus the `researcher` and `@citation-walker` agent profiles.
+* **[CLI, Telemetry & Configuration Reference (`docs/CLI_AND_CONFIG.md`)](./docs/CLI_AND_CONFIG.md)** — Complete guide to `ra-cli` commands, environment variables, `.env` precedence, OpenCode configuration merging, and the cold-start pipeline stages.
 
 ---
 
