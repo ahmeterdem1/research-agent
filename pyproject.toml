@@ -33,6 +33,11 @@ dependencies = [
 
 [project.scripts]
 research-agent = "research_agent:main"
+ra-cli = "research_agent:main"
+ra-mcp-docs = "research_agent:mcp_docs"
+ra-mcp-search = "research_agent:mcp_search"
+ra-mcp-ingest = "research_agent:mcp_ingest"
+ra-mcp-kg = "research_agent:mcp_kg"
 
 [build-system]
 requires = ["uv_build>=0.12.17,<0.13.0"]
