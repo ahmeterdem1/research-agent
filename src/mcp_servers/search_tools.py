@@ -24,6 +24,7 @@ from src.subagents.citation_walker import (
     get_references,
     walk_citation_graph as cw_run,
 )
+from src.telemetry.store import track_tool
 
 logger = get_logger(__name__)
 
@@ -32,6 +33,7 @@ sch = SemanticScholar()
 
 
 @mcp.tool()
+@track_tool("ra_search")
 def duckduckgo_search(query: str, num_results: int = 5) -> str:
     """
     Perform a free general web search using DuckDuckGo.
@@ -56,6 +58,7 @@ def duckduckgo_search(query: str, num_results: int = 5) -> str:
 
 
 @mcp.tool()
+@track_tool("ra_search")
 def scholar_search(query: str, num_results: int = 5) -> str:
     """
     Perform an academic search using the Semantic Scholar API.
@@ -103,6 +106,7 @@ def scholar_search(query: str, num_results: int = 5) -> str:
 
 
 @mcp.tool()
+@track_tool("ra_search")
 def get_paper_details(paper_id_or_doi: str) -> str:
     """
     Fetch full details, including the abstract and TLDR, for a specific paper from Semantic Scholar.
@@ -143,6 +147,7 @@ def get_paper_details(paper_id_or_doi: str) -> str:
 
 
 @mcp.tool()
+@track_tool("ra_search")
 def get_paper_references(paper_id_or_doi: str, limit: int = 10) -> str:
     """
     Fetch backward references (papers cited BY the given paper) from Semantic Scholar.
@@ -161,6 +166,7 @@ def get_paper_references(paper_id_or_doi: str, limit: int = 10) -> str:
 
 
 @mcp.tool()
+@track_tool("ra_search")
 def get_paper_citations(paper_id_or_doi: str, limit: int = 10) -> str:
     """
     Fetch forward citations (newer papers that cite the given paper) from Semantic Scholar.
@@ -179,6 +185,7 @@ def get_paper_citations(paper_id_or_doi: str, limit: int = 10) -> str:
 
 
 @mcp.tool()
+@track_tool("ra_search")
 def read_online_document(url_or_arxiv_id: str) -> str:
     """
     Fetches the raw text of a document from the web.
@@ -224,6 +231,7 @@ def read_online_document(url_or_arxiv_id: str) -> str:
 
 
 @mcp.tool()
+@track_tool("ra_search")
 def walk_citation_graph(start_doi_or_id: str, depth: int = 2) -> str:
     """
     Explores 1-hop forward and backward citations starting from the given paper ID or DOI.

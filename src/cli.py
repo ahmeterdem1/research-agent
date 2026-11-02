@@ -393,6 +393,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_status = sub.add_parser("status", help="Display global and current-project Research Agent status")
     p_status.add_argument("--project-dir", type=Path, default=None)
 
+    # 6. stats
+    p_stats = sub.add_parser(
+        "stats",
+        help="Display tool and subagent usage telemetry, error rates, latency, and behavioral diagnostics",
+    )
+    p_stats.add_argument("--project", type=str, default=None, help="Filter by specific project_id")
+    p_stats.add_argument("--all-projects", action="store_true", help="Aggregate telemetry across all projects")
+    p_stats.add_argument("--days", type=int, default=None, help="Restrict telemetry to the last N days")
+    p_stats.add_argument("--recent", type=int, default=10, help="Number of recent tool invocations to list")
+    p_stats.add_argument("--errors-only", action="store_true", help="Only list errors in the recent invocations block")
+    p_stats.add_argument("--reset", action="store_true", help="Clear recorded telemetry for the target project (or all with --all-projects)")
+
     args = parser.parse_args(argv)
 
     if args.command == "install-opencode":
@@ -467,6 +479,26 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.command == "status":
         st = get_status(project_dir=args.project_dir)
         print(format_status(st))
+        return 0
+
+    if args.command == "stats":
+        from src.telemetry.store import TelemetryStore, format_telemetry_summary
+
+        tstore = TelemetryStore(settings.DB_PATH)
+        if args.reset:
+            target_pid = None if args.all_projects else tstore.resolve_project_id(args.project)
+            deleted = tstore.reset(project_id=target_pid)
+            print(f"Cleared {deleted} telemetry record(s).")
+            return 0
+
+        summary = tstore.get_summary(
+            project_id=args.project,
+            all_projects=args.all_projects,
+            days=args.days,
+            recent_limit=args.recent,
+            errors_only=args.errors_only,
+        )
+        print(format_telemetry_summary(summary))
         return 0
 
     return 0

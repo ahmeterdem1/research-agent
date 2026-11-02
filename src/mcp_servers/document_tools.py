@@ -16,6 +16,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from config import settings
 from config.settings import get_logger
+from src.telemetry.store import track_tool
 from src.vtree.operations import VTreeManager
 from src.vtree.store import VTreeStore
 
@@ -74,6 +75,7 @@ def _iter_managers(scope: str) -> list[tuple[str, VTreeManager]]:
 
 
 @mcp.tool()
+@track_tool("ra_docs")
 def get_dir_summary(
     virtual_path: str,
     scope: Literal["global", "project"] = "global",
@@ -94,6 +96,7 @@ def get_dir_summary(
 
 
 @mcp.tool()
+@track_tool("ra_docs")
 def list_doc_summaries(
     virtual_path: str,
     scope: Literal["global", "project"] = "global",
@@ -124,6 +127,7 @@ def list_doc_summaries(
 
 
 @mcp.tool()
+@track_tool("ra_docs")
 def list_tree(
     virtual_path: str = "/",
     include_summaries: bool = False,
@@ -169,6 +173,7 @@ def list_tree(
 
 
 @mcp.tool()
+@track_tool("ra_docs")
 def get_document(
     virtual_path: str,
     scope: Literal["global", "project"] = "global",
@@ -200,6 +205,7 @@ def get_document(
 
 
 @mcp.tool()
+@track_tool("ra_docs")
 def get_documents(
     virtual_paths: List[str],
     scope: Literal["global", "project"] = "global",
@@ -213,6 +219,7 @@ def get_documents(
 
 
 @mcp.tool()
+@track_tool("ra_docs")
 def search_library(
     query: str,
     scope: Literal["all", "global", "project"] = "all",
@@ -256,6 +263,7 @@ def search_library(
 
 
 @mcp.tool()
+@track_tool("ra_docs")
 def get_document_real_path(
     virtual_path: str,
     scope: Literal["global", "project"] = "global",

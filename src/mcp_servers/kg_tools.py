@@ -20,6 +20,7 @@ from config.settings import get_logger
 from src.kg.reasoning import format_user_profile, get_topic_context, get_user_profile
 from src.kg.schema import USER_CLASS_NAME
 from src.kg.store import KGError, KGStore
+from src.telemetry.store import track_tool
 
 logger = get_logger(__name__)
 
@@ -39,6 +40,7 @@ def get_store() -> KGStore:
 
 
 @mcp.tool()
+@track_tool("ra_kg")
 def add_triplet(
     subject: str,
     relation: str,
@@ -97,6 +99,7 @@ def add_triplet(
 
 
 @mcp.tool()
+@track_tool("ra_kg")
 def query_kg(
     subject: Optional[str] = None,
     relation: Optional[str] = None,
@@ -138,6 +141,7 @@ def query_kg(
 
 
 @mcp.tool()
+@track_tool("ra_kg")
 def update_triplet(
     triplet_id: int,
     confidence: Optional[float] = None,
@@ -174,6 +178,7 @@ def update_triplet(
 
 
 @mcp.tool()
+@track_tool("ra_kg")
 def retract_triplet(triplet_id: int, reason: str) -> str:
     """
     Marks a fact as no longer true (e.g. the user abandoned a project hypothesis, corrected a
@@ -189,6 +194,7 @@ def retract_triplet(triplet_id: int, reason: str) -> str:
 
 
 @mcp.tool()
+@track_tool("ra_kg")
 def get_user_profile_summary(scope: Literal["all", "global", "project"] = "all") -> str:
     """
     Returns what is currently known about the user, separated into:
@@ -210,6 +216,7 @@ def get_user_profile_summary(scope: Literal["all", "global", "project"] = "all")
 
 
 @mcp.tool()
+@track_tool("ra_kg")
 def search_entities(query: str, entity_class: Optional[str] = None, limit: int = 20) -> str:
     """
     Finds entities whose name contains `query` (case-insensitive). Use this to discover
@@ -223,6 +230,7 @@ def search_entities(query: str, entity_class: Optional[str] = None, limit: int =
 
 
 @mcp.tool()
+@track_tool("ra_kg")
 def get_related_facts(
     entity: str,
     depth: int = 2,
@@ -243,6 +251,7 @@ def get_related_facts(
 
 
 @mcp.tool()
+@track_tool("ra_kg")
 def get_ontology() -> str:
     """
     Lists the classes (entity types) and relations (with their required subject/object
@@ -258,6 +267,7 @@ def get_ontology() -> str:
 
 
 @mcp.tool()
+@track_tool("ra_kg")
 def extend_ontology(
     kind: Literal["class", "relation"],
     name: str,

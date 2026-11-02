@@ -75,6 +75,23 @@ CREATE INDEX IF NOT EXISTS idx_triplets_relation ON triplets(relation)   WHERE i
 CREATE INDEX IF NOT EXISTS idx_triplets_scope    ON triplets(scope, project_id) WHERE is_active = 1;
 CREATE INDEX IF NOT EXISTS idx_triplets_expires  ON triplets(expires_at)
     WHERE expires_at IS NOT NULL AND is_active = 1;
+
+CREATE TABLE IF NOT EXISTS tool_invocations (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_name TEXT NOT NULL,                  -- 'ra_docs', 'ra_search', 'ra_ingest', 'ra_kg'
+    tool_name   TEXT NOT NULL,                  -- e.g. 'search_library', 'add_triplet'
+    project_id  TEXT NOT NULL,                  -- active workspace project_id
+    scope       TEXT,                           -- 'global', 'project', 'all', or NULL
+    status      TEXT NOT NULL DEFAULT 'ok',     -- 'ok' or 'error'
+    duration_ms REAL NOT NULL DEFAULT 0.0,
+    args_json   TEXT,                           -- JSON of arguments (truncated for safety)
+    error_msg   TEXT,                           -- populated when status='error'
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_tool_invocations_project ON tool_invocations(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_tool_invocations_tool    ON tool_invocations(server_name, tool_name);
+CREATE INDEX IF NOT EXISTS idx_tool_invocations_status  ON tool_invocations(status) WHERE status = 'error';
 """
 
 # (name, description)

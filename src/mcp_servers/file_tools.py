@@ -21,6 +21,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from config import settings
 from config.settings import get_logger
+from src.telemetry.store import track_tool
 from src.vtree.operations import VTreeManager
 from src.vtree.store import VTreeStore
 
@@ -67,6 +68,7 @@ def _derive_name(url_or_arxiv_id: str, title: Optional[str] = None) -> str:
 
 
 @mcp.tool()
+@track_tool("ra_ingest")
 def stage_paper(
     url_or_arxiv_id: str,
     target_virtual_dir: str,
@@ -174,6 +176,7 @@ def _persist_to_vtree(paper_info: dict) -> None:
 
 
 @mcp.tool()
+@track_tool("ra_ingest")
 def confirm_save_paper(temp_id: str) -> str:
     """
     Finalizes the saving of a staged paper into the local VTree library (`global` or `project`).
