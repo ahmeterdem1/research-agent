@@ -14,10 +14,17 @@ A local-first academic and technical research extension for **OpenCode** (`openc
 ## Quick Start
 
 ### 1. Install Globally with `uv`
-From the repository root, install the package in editable tool mode so all CLI and MCP binaries (`ra-cli`, `ra-mcp-docs`, `ra-mcp-search`, `ra-mcp-ingest`, `ra-mcp-kg`) are available system-wide on your `$PATH`:
+Install the package system-wide so all CLI and MCP binaries (`ra-cli`, `ra-mcp-docs`, `ra-mcp-search`, `ra-mcp-ingest`, `ra-mcp-kg`) are available on your `$PATH`:
 
 ```bash
+# Standalone system-wide installation from GitHub (recommended for general use)
+uv tool install git+https://github.com/ahmeterdem1/research-agent.git
+
+# Or editable installation from a local development checkout
 uv tool install -e .
+
+# Upgrade your system-wide installation anytime from GitHub (leaves local dev checkouts untouched)
+ra-cli upgrade
 ```
 
 ### 2. Configure Your Global API Key

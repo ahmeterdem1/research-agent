@@ -177,3 +177,67 @@ def test_cli_refresh_command_adds_new_files_to_target_dir(monkeypatch, tmp_path,
     assert "/Inbox/DroppedNote" in out
 
 
+def test_cli_upgrade_checks_version_and_upgrades_via_uv_or_homebrew(monkeypatch, tmp_path, capsys):
+    from src import updater
+
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path / "ra_home")
+    monkeypatch.setattr(updater, "get_local_version", lambda: "0.1.0")
+
+    # 1. Same version and same SHA -> no-op ("Already up to date")
+    updater.save_install_receipt({"version": "0.1.0", "sha": "abc123456789"})
+    monkeypatch.setattr(
+        updater,
+        "fetch_remote_release_info",
+        lambda repo=updater.DEFAULT_GITHUB_REPO, ref="HEAD": {
+            "version": "0.1.0",
+            "sha": "abc123456789",
+            "source": "mock",
+        },
+    )
+
+    rc1 = cli.main(["upgrade"])
+    assert rc1 == 0
+    assert "Already up to date (version 0.1.0)" in capsys.readouterr().out
+
+    # 2. Newer remote version (0.2.0) -> triggers `uv tool install --force` and updates receipt
+    monkeypatch.setattr(
+        updater,
+        "fetch_remote_release_info",
+        lambda repo=updater.DEFAULT_GITHUB_REPO, ref="HEAD": {
+            "version": "0.2.0",
+            "sha": "def987654321",
+            "source": "mock",
+        },
+    )
+    uv_calls = []
+    monkeypatch.setattr(
+        updater,
+        "_run_uv_global_install",
+        lambda repo, ref: (uv_calls.append((repo, ref)) or True, "Installed via uv"),
+    )
+    monkeypatch.setattr(updater, "_refresh_opencode_integration", lambda: None)
+
+    rc2 = cli.main(["upgrade", "--method", "uv"])
+    assert rc2 == 0
+    out2 = capsys.readouterr().out
+    assert "Successfully upgraded system-wide installation (uv) from 0.1.0 -> 0.2.0" in out2
+    assert uv_calls == [("ahmeterdem1/research-agent", "HEAD")]
+    receipt = updater.load_install_receipt()
+    assert receipt["version"] == "0.2.0"
+    assert receipt["sha"] == "def987654321"
+
+    # 3. Homebrew method support (`--method homebrew --force`)
+    brew_calls = []
+    monkeypatch.setattr(
+        updater,
+        "_run_homebrew_upgrade",
+        lambda formula="research-agent": (brew_calls.append(formula) or True, "Upgraded via brew"),
+    )
+    rc3 = cli.main(["upgrade", "--method", "homebrew", "--force"])
+    assert rc3 == 0
+    out3 = capsys.readouterr().out
+    assert "Successfully upgraded system-wide installation (homebrew)" in out3
+    assert brew_calls == ["research-agent"]
+
+
+

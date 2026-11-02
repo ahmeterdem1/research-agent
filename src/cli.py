@@ -328,9 +328,17 @@ def format_status(status: dict) -> str:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    from src.updater import DEFAULT_GITHUB_REPO, get_local_version
+
     parser = argparse.ArgumentParser(
         prog="ra-cli",
         description="System-wide management CLI for the Research Agent OpenCode extension.",
+    )
+    parser.add_argument(
+        "-v",
+        "--version",
+        action="version",
+        version=f"ra-cli {get_local_version()}",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -435,7 +443,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_status = sub.add_parser("status", help="Display global and current-project Research Agent status")
     p_status.add_argument("--project-dir", type=Path, default=None)
 
-    # 6. stats
+    # 7. stats
     p_stats = sub.add_parser(
         "stats",
         help="Display tool and subagent usage telemetry, error rates, latency, and behavioral diagnostics",
@@ -446,6 +454,40 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_stats.add_argument("--recent", type=int, default=10, help="Number of recent tool invocations to list")
     p_stats.add_argument("--errors-only", action="store_true", help="Only list errors in the recent invocations block")
     p_stats.add_argument("--reset", action="store_true", help="Clear recorded telemetry for the target project (or all with --all-projects)")
+
+    # 8. upgrade
+    p_upgrade = sub.add_parser(
+        "upgrade",
+        help="Upgrade the system-wide Research Agent installation from GitHub (or Homebrew) without modifying local dev files",
+    )
+    p_upgrade.add_argument(
+        "--repo",
+        type=str,
+        default=DEFAULT_GITHUB_REPO,
+        help=f"GitHub owner/repo slug (defaults to {DEFAULT_GITHUB_REPO})",
+    )
+    p_upgrade.add_argument(
+        "--ref",
+        type=str,
+        default="HEAD",
+        help="Git branch, tag, or commit SHA to install (defaults to HEAD)",
+    )
+    p_upgrade.add_argument(
+        "--method",
+        choices=["uv", "homebrew"],
+        default=None,
+        help="Override detected package manager ('uv' or 'homebrew')",
+    )
+    p_upgrade.add_argument(
+        "--check",
+        action="store_true",
+        help="Only check if a newer version/commit is available on GitHub without installing",
+    )
+    p_upgrade.add_argument(
+        "--force",
+        action="store_true",
+        help="Reinstall from GitHub even if local and remote versions match",
+    )
 
     args = parser.parse_args(argv)
 
@@ -570,6 +612,21 @@ def main(argv: Optional[list[str]] = None) -> int:
             errors_only=args.errors_only,
         )
         print(format_telemetry_summary(summary))
+        return 0
+
+    if args.command == "upgrade":
+        from src.updater import run_upgrade
+
+        res = run_upgrade(
+            repo=args.repo,
+            ref=args.ref,
+            method=args.method,
+            check_only=args.check,
+            force=args.force,
+        )
+        print(res.message)
+        if not res.upgraded and res.message.startswith("Upgrade failed:"):
+            return 1
         return 0
 
     return 0

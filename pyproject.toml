@@ -1,6 +1,6 @@
 [project]
 name = "research-agent"
-version = "0.1.0"
+version = "0.1.1"
 description = "Add your description here"
 readme = "README.md"
 authors = [
@@ -32,16 +32,20 @@ dependencies = [
 ]
 
 [project.scripts]
-research-agent = "research_agent:main"
-ra-cli = "research_agent:main"
-ra-mcp-docs = "research_agent:mcp_docs"
-ra-mcp-search = "research_agent:mcp_search"
-ra-mcp-ingest = "research_agent:mcp_ingest"
-ra-mcp-kg = "research_agent:mcp_kg"
+research-agent = "src.research_agent:main"
+ra-cli = "src.research_agent:main"
+ra-mcp-docs = "src.research_agent:mcp_docs"
+ra-mcp-search = "src.research_agent:mcp_search"
+ra-mcp-ingest = "src.research_agent:mcp_ingest"
+ra-mcp-kg = "src.research_agent:mcp_kg"
 
 [build-system]
 requires = ["uv_build>=0.12.17,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+module-name = ["src", "config", "scripts"]
 
 [tool.uv.sources]
 torch = [

@@ -175,3 +175,19 @@ ra-cli stats --reset --all-projects
 > **Combining `ra-cli stats` with `opencode stats`**:
 > Use `opencode stats --models --tools` to inspect LLM token consumption and dollar costs across models, and use `ra-cli stats` to inspect MCP tool latencies, soft error messages, `global` vs. `project` scope usage, and behavioral compliance.
 
+### 3.8 `ra-cli upgrade`
+Checks the source GitHub repository (`https://github.com/ahmeterdem1/research-agent`, supporting private repositories via `gh` CLI, `GITHUB_TOKEN`, or SSH/HTTPS `git ls-remote`) and upgrades your **system-wide installation** (`uv tool` or Homebrew) if the remote version or commit differs from your installed version—**without touching any local development checkout**:
+
+```bash
+# Check if an upgrade is available on GitHub without installing
+ra-cli upgrade --check
+
+# Upgrade the system-wide installation if a newer version/commit is on GitHub
+ra-cli upgrade
+
+# Force reinstall from a specific branch or tag (or via Homebrew when published)
+ra-cli upgrade --ref main --force
+ra-cli upgrade --method homebrew
+```
+
+

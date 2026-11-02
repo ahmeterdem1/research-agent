@@ -8,6 +8,7 @@ have been moved inside the virtual tree), processes **only** the newly added fil
 disturbing existing nodes or semantic folder organization.
 """
 
+import concurrent.futures
 from dataclasses import dataclass, field
 import hashlib
 from pathlib import Path
@@ -384,19 +385,27 @@ def refresh_vtree(
         repaired_nodes=repaired_nodes,
     )
 
-    for finfo in unindexed:
-        try:
-            node_dict = _process_new_file(finfo, book_threshold=book_threshold)
-            if node_dict is None:
-                result.failed_files.append(finfo.real_path)
-                continue
+    if unindexed:
+        max_workers = max(1, int(getattr(settings, "MAX_CONCURRENT_REQUESTS", 5)))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_finfo = {
+                executor.submit(_process_new_file, finfo, book_threshold): finfo
+                for finfo in unindexed
+            }
+            for future in concurrent.futures.as_completed(future_to_finfo):
+                finfo = future_to_finfo[future]
+                try:
+                    node_dict = future.result()
+                    if node_dict is None:
+                        result.failed_files.append(finfo.real_path)
+                        continue
 
-            vdir = _infer_virtual_dir(finfo.real_path, resolved_lib, target_virtual_dir)
-            inserted = mgr.add_document(vdir, node_dict)
-            result.added_nodes.append(inserted)
-        except Exception as e:
-            logger.error("Failed processing new file '%s' during refresh: %s", finfo.real_path, e)
-            result.failed_files.append(finfo.real_path)
+                    vdir = _infer_virtual_dir(finfo.real_path, resolved_lib, target_virtual_dir)
+                    inserted = mgr.add_document(vdir, node_dict)
+                    result.added_nodes.append(inserted)
+                except Exception as e:
+                    logger.error("Failed processing new file '%s' during refresh: %s", finfo.real_path, e)
+                    result.failed_files.append(finfo.real_path)
 
     dirty_dirs = update_dir_summaries and _has_dirty_directories(vtree_dict.get("root", {}))
     if result.added_nodes or result.repaired_nodes or dirty_dirs:
