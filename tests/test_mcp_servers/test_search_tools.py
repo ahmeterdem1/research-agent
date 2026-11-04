@@ -27,7 +27,7 @@ def test_scholar_search(mock_get):
                 "year": 2017,
                 "citationCount": 10000,
                 "url": "http://s2.org/123",
-                "externalIds": {"DOI": "10.1234"}
+                "externalIds": {"DOI": "10.1234", "ArXiv": "1706.03762"}
             }
         ]
     }
@@ -37,6 +37,7 @@ def test_scholar_search(mock_get):
     assert "Title: Attention Paper" in result
     assert "Authors: Ashish Vaswani" in result
     assert "DOI: 10.1234" in result
+    assert "ArXiv ID: 1706.03762" in result
 
 @patch("src.mcp_servers.search_tools.requests.get")
 def test_scholar_search_429(mock_get):

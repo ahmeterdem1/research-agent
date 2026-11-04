@@ -6,10 +6,11 @@ arXiv/web document reading, and forward/backward citation graph edges.
 """
 
 from pathlib import Path
+import os
 import re
 import sys
 import tempfile
-import urllib.request
+from typing import Optional
 
 from duckduckgo_search import DDGS
 from fastmcp import FastMCP
@@ -18,6 +19,7 @@ from semanticscholar import SemanticScholar
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
+from config import settings
 from config.settings import get_logger
 from src.subagents.citation_walker import (
     get_citations,
@@ -30,6 +32,72 @@ logger = get_logger(__name__)
 
 mcp = FastMCP("SearchTools")
 sch = SemanticScholar()
+
+
+def _s2_headers() -> dict[str, str]:
+    headers = {"User-Agent": "ResearchAgent/1.0"}
+    api_key = os.getenv("S2_API_KEY") or os.getenv("SEMANTIC_SCHOLAR_API_KEY")
+    if api_key:
+        headers["x-api-key"] = api_key.strip()
+    return headers
+
+
+def _reconstruct_openalex_abstract(inv_index: Optional[dict]) -> str:
+    if not inv_index or not isinstance(inv_index, dict):
+        return ""
+    pos_map: dict[int, str] = {}
+    for word, positions in inv_index.items():
+        if isinstance(positions, list):
+            for p in positions:
+                if isinstance(p, int):
+                    pos_map[p] = word
+    if not pos_map:
+        return ""
+    return " ".join(pos_map[idx] for idx in sorted(pos_map.keys()))
+
+
+def _openalex_search_fallback(query: str, num_results: int) -> Optional[str]:
+    try:
+        res = requests.get(
+            "https://api.openalex.org/works",
+            params={"search": query, "per-page": max(1, min(num_results, 25))},
+            headers={"User-Agent": "ResearchAgent/1.0"},
+            timeout=10,
+        )
+        if res.status_code != 200:
+            return None
+        items = (res.json() or {}).get("results") or []
+        if not items:
+            return None
+        formatted = ["[Note: Semantic Scholar rate-limited (429); served via OpenAlex fallback]"]
+        for w in items[:num_results]:
+            authors = ", ".join(
+                a.get("author", {}).get("display_name", "")
+                for a in (w.get("authorships") or [])
+                if a.get("author", {}).get("display_name")
+            )
+            year = w.get("publication_year", "Unknown Year")
+            citations = w.get("cited_by_count", 0)
+            raw_doi = w.get("doi") or ""
+            doi = raw_doi.replace("https://doi.org/", "") if raw_doi else "No DOI"
+            ids_dict = w.get("ids") or {}
+            raw_arxiv = ids_dict.get("arxiv") or ""
+            arxiv_id = raw_arxiv.split("arxiv.org/abs/")[-1] if "arxiv.org/abs/" in raw_arxiv else (raw_arxiv or "No ArXiv ID")
+            paper_id = (w.get("id") or "Unknown ID").replace("https://openalex.org/", "")
+            oa_url = (w.get("open_access") or {}).get("oa_url") or w.get("id") or "No URL"
+            formatted.append(
+                f"Title: {w.get('title') or w.get('display_name')}\n"
+                f"Paper ID: {paper_id}\n"
+                f"DOI: {doi}\n"
+                f"ArXiv ID: {arxiv_id}\n"
+                f"Authors: {authors}\n"
+                f"Year: {year} | Citations: {citations}\n"
+                f"URL: {oa_url}\n---"
+            )
+        return "\n".join(formatted)
+    except Exception as e:
+        logger.debug("OpenAlex search fallback failed: %s", e)
+        return None
 
 
 @mcp.tool()
@@ -74,6 +142,9 @@ def scholar_search(query: str, num_results: int = 5) -> str:
         res = requests.get(url, params=params, timeout=10)
 
         if res.status_code == 429:
+            fallback = _openalex_search_fallback(query, num_results)
+            if fallback:
+                return fallback
             return "Error: Semantic Scholar API Rate Limit Exceeded (429)."
         res.raise_for_status()
 
@@ -88,12 +159,15 @@ def scholar_search(query: str, num_results: int = 5) -> str:
             citations = p.get("citationCount", 0)
             url_val = p.get("url", "No URL")
             paper_id = p.get("paperId", "Unknown ID")
-            doi = p.get("externalIds", {}).get("DOI", "No DOI")
+            ext_ids = p.get("externalIds") or {}
+            doi = ext_ids.get("DOI", "No DOI")
+            arxiv_id = ext_ids.get("ArXiv", "No ArXiv ID")
 
             formatted.append(
                 f"Title: {p.get('title')}\n"
                 f"Paper ID: {paper_id}\n"
                 f"DOI: {doi}\n"
+                f"ArXiv ID: {arxiv_id}\n"
                 f"Authors: {authors}\n"
                 f"Year: {year} | Citations: {citations}\n"
                 f"URL: {url_val}\n---"
@@ -103,6 +177,49 @@ def scholar_search(query: str, num_results: int = 5) -> str:
     except Exception as e:
         logger.warning("scholar_search failed for '%s': %s", query, e)
         return f"Scholar search failed: {e}"
+
+
+def _openalex_details_fallback(paper_id_or_doi: str) -> Optional[str]:
+    try:
+        clean = paper_id_or_doi.strip()
+        if "/" in clean:
+            clean_doi = clean.replace("https://doi.org/", "").replace("DOI:", "")
+            url = f"https://api.openalex.org/works/https://doi.org/{clean_doi}"
+            res = requests.get(url, headers={"User-Agent": "ResearchAgent/1.0"}, timeout=10)
+        else:
+            res = requests.get(
+                "https://api.openalex.org/works",
+                params={"search": clean, "per-page": 1},
+                headers={"User-Agent": "ResearchAgent/1.0"},
+                timeout=10,
+            )
+        if res.status_code != 200:
+            return None
+        data = res.json() or {}
+        w = data["results"][0] if "results" in data and data["results"] else data
+        if not w or not w.get("title"):
+            return None
+        authors = ", ".join(
+            a.get("author", {}).get("display_name", "")
+            for a in (w.get("authorships") or [])
+            if a.get("author", {}).get("display_name")
+        )
+        year = w.get("publication_year", "Unknown")
+        venue = ((w.get("primary_location") or {}).get("source") or {}).get("display_name") or "Unknown Venue"
+        citations = w.get("cited_by_count", 0)
+        abstract = _reconstruct_openalex_abstract(w.get("abstract_inverted_index")) or "No Abstract Available"
+        oa_url = (w.get("open_access") or {}).get("oa_url") or w.get("id") or ""
+        return (
+            f"Title: {w.get('title', 'Unknown')}\n"
+            f"Authors: {authors}\n"
+            f"Venue: {venue} ({year})\n"
+            f"Citations: {citations}\n"
+            f"URL: {oa_url}\n\n"
+            f"TLDR: No TLDR Available\n\n"
+            f"Abstract:\n{abstract}"
+        )
+    except Exception:
+        return None
 
 
 @mcp.tool()
@@ -119,6 +236,9 @@ def get_paper_details(paper_id_or_doi: str) -> str:
         res = requests.get(url, params=params, timeout=10)
 
         if res.status_code == 429:
+            fallback = _openalex_details_fallback(paper_id_or_doi)
+            if fallback:
+                return fallback
             return "Error: Semantic Scholar API Rate Limit Exceeded (429)."
         res.raise_for_status()
 
@@ -131,9 +251,13 @@ def get_paper_details(paper_id_or_doi: str) -> str:
 
         tldr_obj = p.get("tldr")
         tldr = tldr_obj.get("text") if tldr_obj else "No TLDR Available"
+        ext_ids = p.get("externalIds") or {}
+        doi = ext_ids.get("DOI", "No DOI")
+        arxiv_id = ext_ids.get("ArXiv", "No ArXiv ID")
 
         return (
             f"Title: {p.get('title', 'Unknown')}\n"
+            f"DOI: {doi} | ArXiv ID: {arxiv_id}\n"
             f"Authors: {authors}\n"
             f"Venue: {venue} ({year})\n"
             f"Citations: {citations}\n"
@@ -189,7 +313,9 @@ def get_paper_citations(paper_id_or_doi: str, limit: int = 10) -> str:
 def read_online_document(url_or_arxiv_id: str) -> str:
     """
     Fetches the raw text of a document from the web.
-    If given an arXiv ID (e.g. '1706.03762' or 'arxiv:1706.03762'), it downloads the PDF and extracts text.
+    If given an arXiv ID (e.g. '1706.03762' or 'arxiv:1706.03762'), it downloads the PDF,
+    caches both the PDF and extracted Markdown in `~/.research-agent/cache/online_docs/`
+    (so subsequent `stage_paper` calls do not re-download or re-run Vision OCR), and returns the text.
     If given a regular URL, it fetches the raw HTML/text.
 
     WARNING: Before using this tool to fetch an academic paper, ALWAYS use the `search_library` tool
@@ -201,18 +327,27 @@ def read_online_document(url_or_arxiv_id: str) -> str:
             from src.cold_start.extractor import extract_content
 
             arxiv_id = arxiv_match.group(1) if arxiv_match else url_or_arxiv_id.split(":")[-1]
+            safe_id = re.sub(r"[^a-zA-Z0-9._-]", "_", arxiv_id)
+            online_cache_dir = settings.CACHE_DIR / "online_docs"
+            online_cache_dir.mkdir(parents=True, exist_ok=True)
+            cached_md_path = online_cache_dir / f"arxiv_{safe_id}.md"
+            cached_pdf_path = online_cache_dir / f"arxiv_{safe_id}.pdf"
+
+            if cached_md_path.exists():
+                cached_text = cached_md_path.read_text(encoding="utf-8")
+                if cached_text.strip():
+                    logger.info("Serving arXiv %s from online_docs cache (%s)", arxiv_id, cached_md_path)
+                    return cached_text
+
             pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+            headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ResearchAgent/1.0"}
+            resp = requests.get(pdf_url, headers=headers, timeout=20)
+            resp.raise_for_status()
+            cached_pdf_path.write_bytes(resp.content)
 
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-                urllib.request.urlretrieve(pdf_url, tmp.name)
-                tmp_path = Path(tmp.name)
-
-            try:
-                content = extract_content(tmp_path)
-            finally:
-                tmp_path.unlink(missing_ok=True)
-
-            if content:
+            content = extract_content(cached_pdf_path)
+            if content and content.text.strip():
+                cached_md_path.write_text(content.text, encoding="utf-8")
                 return content.text
             return "Failed to extract text from arXiv PDF."
 

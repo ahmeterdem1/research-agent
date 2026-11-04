@@ -173,7 +173,9 @@ def test_cli_refresh_command_adds_new_files_to_target_dir(monkeypatch, tmp_path,
     )
     assert rc == 0
     out = capsys.readouterr().out
-    assert "Scanned: 1 | Already indexed: 0 | Newly added: 1" in out
+    assert "=== VTree Refresh Pre-Flight Plan [GLOBAL] ===" in out
+    assert "Scanned: 1 | Already indexed: 0" in out
+    assert "Newly added: 1" in out
     assert "/Inbox/DroppedNote" in out
 
 
@@ -238,6 +240,74 @@ def test_cli_upgrade_checks_version_and_upgrades_via_uv_or_homebrew(monkeypatch,
     out3 = capsys.readouterr().out
     assert "Successfully upgraded system-wide installation (homebrew)" in out3
     assert brew_calls == ["research-agent"]
+
+
+def test_cli_rm_and_index_dry_run(monkeypatch, tmp_path, capsys):
+    from src.cold_start import refresher
+
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    (lib_dir / "Note.md").write_text("# Sample Note\nContent", encoding="utf-8")
+    vtree_path = tmp_path / "vtree.json"
+
+    # 1. `ra-cli index --dry-run` prints preflight plan without running subprocess stages
+    rc_idx = cli.main(
+        [
+            "index",
+            "--library-path",
+            str(lib_dir),
+            "--output-vtree",
+            str(vtree_path),
+            "--dry-run",
+        ]
+    )
+    assert rc_idx == 0
+    out_idx = capsys.readouterr().out
+    assert "=== Cold-Start Index Pre-Flight Plan [GLOBAL] ===" in out_idx
+    assert "[Dry Run] No documents were parsed and no LLM calls were made." in out_idx
+
+    # 2. `ra-cli rm` removes an unwanted node and updates ancestor summaries
+    vtree_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "library_root": str(lib_dir),
+                "root": {
+                    "type": "directory",
+                    "name": "Root",
+                    "virtual_path": "/",
+                    "summary": "Root",
+                    "children": [
+                        {
+                            "type": "directory",
+                            "name": "papers",
+                            "virtual_path": "/papers",
+                            "summary": "User created directory.",
+                            "children": [
+                                {
+                                    "type": "document",
+                                    "name": "123",
+                                    "virtual_path": "/papers/123",
+                                    "real_path": "http://arxiv.org/123",
+                                    "summary": "Dummy node",
+                                }
+                            ],
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(refresher, "summarize_directory", lambda sums: "Refreshed dir summary")
+
+    rc_rm = cli.main(["rm", "/papers/123", "--vtree-path", str(vtree_path)])
+    assert rc_rm == 0
+    out_rm = capsys.readouterr().out
+    assert "Successfully removed [document] '/papers/123'" in out_rm
+    saved = json.loads(vtree_path.read_text(encoding="utf-8"))
+    assert saved["root"]["children"][0]["children"] == []
+
 
 
 

@@ -21,14 +21,16 @@ def split_book(file_info: FileInfo, limit: int = 30) -> SplitResult:
     import sys
     sys.path.append(str(Path(__file__).parent.parent.parent))
     from config import settings
+    from config.settings import get_logger
+
+    logger = get_logger(__name__)
     
     try:
         with fitz.open(file_info.real_path) as doc:
             toc = doc.get_toc()
-            if not toc:
-                return SplitResult(is_split=False, sections=[], warning="No TOC found.")
-                
             total_pages = doc.page_count
+            if total_pages <= 0:
+                return SplitResult(is_split=False, sections=[], warning="Empty PDF document.")
             
             def chunk_range(s, e, base_title, lim):
                 chunks = []
@@ -71,7 +73,16 @@ def split_book(file_info: FileInfo, limit: int = 30) -> SplitResult:
                         
                 return chunks
 
-            final_chunks = process_range(1, total_pages, file_info.name, toc, 1)
+            if toc:
+                final_chunks = process_range(1, total_pages, file_info.name, toc, 1)
+            else:
+                logger.info(
+                    "No PDF TOC found for '%s' (%d pages); splitting into <=%d-page chunks.",
+                    file_info.name,
+                    total_pages,
+                    limit,
+                )
+                final_chunks = chunk_range(1, total_pages, file_info.name, limit)
             
             # --- MERGING LOGIC ---
             # Merge adjacent chunks as long as their total page count is <= limit
@@ -117,7 +128,12 @@ def split_book(file_info: FileInfo, limit: int = 30) -> SplitResult:
             book_cache_dir = settings.CACHE_DIR / "split_books" / file_info.name
             book_cache_dir.mkdir(parents=True, exist_ok=True)
             
-            print(f"Splitting {file_info.name} into {len(merged_chunks)} sections with page counts {[e - s + 1 for s, e, _ in merged_chunks]}")
+            logger.info(
+                "Splitting '%s' into %d sections with page counts %s",
+                file_info.name,
+                len(merged_chunks),
+                [e - s + 1 for s, e, _ in merged_chunks],
+            )
             
             for idx, (start_p, end_p, title) in enumerate(merged_chunks):
                 sec_doc = fitz.open()

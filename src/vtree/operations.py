@@ -157,6 +157,11 @@ class VTreeManager:
         if not src_parts or not dest_parts:
             return "Error: Invalid paths."
 
+        norm_src = "/" + "/".join(src_parts)
+        norm_dest = "/" + "/".join(dest_parts)
+        if norm_dest == norm_src or norm_dest.startswith(norm_src + "/"):
+            return f"Error: Cannot move '{src}' into itself or its own subdirectory '{dest}'."
+
         src_parent_vpath = "/" + "/".join(src_parts[:-1])
         src_name = src_parts[-1]
 
@@ -203,8 +208,40 @@ class VTreeManager:
         if "children" not in dest_parent:
             dest_parent["children"] = []
         dest_parent["children"].append(src_node)
+
+        # Mark both the source parent chain and destination parent chain for summary refresh
+        self.update_ancestor_summaries(norm_src, "")
+        self.update_ancestor_summaries(norm_dest, src_node.get("summary", ""))
         logger.info("Moved VTree node '%s' -> '%s'", src, dest)
         return f"Successfully moved '{src}' to '{dest}'."
+
+    def rm(self, vpath: str) -> str:
+        """Remove a document, book, or directory at ``vpath`` and mark ancestors for summary refresh."""
+        parts = [p for p in vpath.split("/") if p]
+        if not parts:
+            return "Error: Cannot remove root directory '/'."
+
+        norm_vpath = "/" + "/".join(parts)
+        parent_vpath = "/" + "/".join(parts[:-1])
+        target_name = parts[-1]
+
+        parent_node = self._get_node(parent_vpath)
+        if not parent_node or "children" not in parent_node:
+            return f"Error: Path '{vpath}' not found."
+
+        target_idx = -1
+        for i, child in enumerate(parent_node["children"]):
+            if child.get("name") == target_name:
+                target_idx = i
+                break
+
+        if target_idx == -1:
+            return f"Error: Path '{vpath}' not found."
+
+        removed = parent_node["children"].pop(target_idx)
+        self.update_ancestor_summaries(norm_vpath, "")
+        logger.info("Removed VTree node '%s' (type=%s)", norm_vpath, removed.get("type"))
+        return f"Successfully removed [{removed.get('type', 'node')}] '{norm_vpath}'."
 
     def search_library(self, query: str) -> list[dict]:
         """

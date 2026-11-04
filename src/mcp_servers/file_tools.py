@@ -173,6 +173,15 @@ def _extract_pdf_file(pdf_path: Path) -> tuple[Optional[str], Optional[int]]:
     return (joined if joined else None), page_count
 
 
+_LUCENE_SPECIAL_RE = re.compile(r'([+\-&|!(){}\[\]^"~*?:\\])')
+
+
+def _escape_arxiv_lucene(text: str) -> str:
+    """Escape Apache Lucene special query characters (such as `:` in titles) with a backslash."""
+    collapsed = re.sub(r"\s+", " ", text).strip()
+    return _LUCENE_SPECIAL_RE.sub(r"\\\1", collapsed)
+
+
 def _lookup_arxiv_api(arxiv_id: Optional[str] = None, title: Optional[str] = None) -> dict:
     """Query the official arXiv Atom API by ID or title."""
     try:
@@ -180,8 +189,8 @@ def _lookup_arxiv_api(arxiv_id: Optional[str] = None, title: Optional[str] = Non
             clean_id = re.sub(r"v\d+$", "", arxiv_id)
             params = {"id_list": clean_id, "max_results": 1}
         elif title:
-            clean_title = re.sub(r'["\n\r]+', " ", title).strip()
-            params = {"search_query": f'ti:"{clean_title}"', "max_results": 3}
+            escaped_title = _escape_arxiv_lucene(title)
+            params = {"search_query": f'ti:"{escaped_title}"', "max_results": 3}
         else:
             return {}
 
@@ -453,23 +462,64 @@ def _resolve_paper_content(
     arxiv_id = _extract_arxiv_id(url_or_arxiv_id)
     if arxiv_id:
         arxiv_meta = _lookup_arxiv_api(arxiv_id=arxiv_id)
-        if arxiv_meta:
-            metadata_pool.append(arxiv_meta)
-            resolved_title = resolved_title or arxiv_meta.get("title")
-            resolved_doi = resolved_doi or arxiv_meta.get("doi")
+        arxiv_title_matches = True
+        if resolved_title and arxiv_meta.get("title"):
+            if not _titles_match(resolved_title, arxiv_meta["title"]):
+                logger.warning(
+                    "Mismatched/hallucinated arXiv ID '%s': arXiv title '%s' does not match expected title '%s'. "
+                    "Skipping Tier 1 and falling back to Tier 2 title resolution.",
+                    arxiv_id,
+                    arxiv_meta.get("title"),
+                    resolved_title,
+                )
+                arxiv_title_matches = False
 
-        arxiv_pdf_url = arxiv_meta.get("pdf_url") or f"https://arxiv.org/pdf/{arxiv_id}.pdf"
-        if _download_pdf_bytes(arxiv_pdf_url, staged_pdf):
-            extracted_md, page_count = _extract_pdf_file(staged_pdf)
-            if extracted_md:
-                return {
-                    "title": _derive_name(url_or_arxiv_id, resolved_title),
-                    "doi": resolved_doi,
-                    "text": extracted_md,
-                    "pdf_path": str(staged_pdf),
-                    "page_count": page_count,
-                    "resolution_tier": "tier1_arxiv_pdf",
-                }
+        if arxiv_title_matches:
+            if arxiv_meta:
+                metadata_pool.append(arxiv_meta)
+                resolved_title = resolved_title or arxiv_meta.get("title")
+                resolved_doi = resolved_doi or arxiv_meta.get("doi")
+
+            # Check if `read_online_document` already cached this arXiv PDF & extracted text
+            safe_id = re.sub(r"[^a-zA-Z0-9._-]", "_", arxiv_id)
+            online_cache_dir = settings.CACHE_DIR / "online_docs"
+            cached_md_path = online_cache_dir / f"arxiv_{safe_id}.md"
+            cached_pdf_path = online_cache_dir / f"arxiv_{safe_id}.pdf"
+            if cached_md_path.exists() and cached_pdf_path.exists():
+                cached_text = cached_md_path.read_text(encoding="utf-8")
+                if cached_text.strip():
+                    staged_pdf.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(cached_pdf_path, staged_pdf)
+                    page_count = None
+                    try:
+                        import fitz
+
+                        with fitz.open(staged_pdf) as doc:
+                            page_count = doc.page_count
+                    except Exception:
+                        pass
+                    logger.info("Reused cached online_docs extraction for arXiv %s (0 pages re-parsed)", arxiv_id)
+                    return {
+                        "title": _derive_name(url_or_arxiv_id, resolved_title),
+                        "doi": resolved_doi,
+                        "text": cached_text,
+                        "pdf_path": str(staged_pdf),
+                        "page_count": page_count,
+                        "resolution_tier": "tier1_arxiv_pdf",
+                    }
+
+            arxiv_pdf_url = arxiv_meta.get("pdf_url") or f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+            if _download_pdf_bytes(arxiv_pdf_url, staged_pdf):
+                extracted_md, page_count = _extract_pdf_file(staged_pdf)
+                if extracted_md:
+                    return {
+                        "title": _derive_name(url_or_arxiv_id, resolved_title),
+                        "doi": resolved_doi,
+                        "text": extracted_md,
+                        "pdf_path": str(staged_pdf),
+                        "page_count": page_count,
+                        "resolution_tier": "tier1_arxiv_pdf",
+                    }
 
     # --- Tier 3 pre-check / HTML meta extraction if an HTTP URL was given ---
     url_info = _inspect_url_directly(url_or_arxiv_id, staged_pdf)
@@ -801,12 +851,15 @@ def refresh_library(
     library_path: Optional[str] = None,
     target_virtual_dir: Optional[str] = None,
     update_dir_summaries: bool = True,
+    dry_run: bool = False,
 ) -> str:
     """
     Incrementally scans the source library directory on disk and indexes any newly dropped
-    PDF, TXT, MD, or DOCX files that are not yet present in the target VTree (`global` or `project`).
+    PDF, TXT, MD, or DOCX files that are not yet present in the target VTree (`global` or `project`),
+    while repairing any inconsistent nodes (missing/placeholder summaries).
 
-    Existing nodes and semantic folder structures in `vtree.json` are preserved untouched.
+    Existing healthy nodes and semantic folder structures in `vtree.json` are never re-parsed.
+    Before parsing begins, computes a verbose pre-flight workload and page-count cost plan.
 
     Arguments:
     - scope: `'global'` (default, updates `~/.research-agent/vtrees/global.json`) or `'project'`
@@ -816,6 +869,8 @@ def refresh_library(
     - target_virtual_dir: Optional virtual directory in the VTree where newly discovered files
       should be placed (e.g. `'/Inbox'`). If omitted, mirrors their relative subfolder path.
     - update_dir_summaries: Whether to refresh ancestor directory summaries via the LLM (default `True`).
+    - dry_run: If `True`, only returns the pre-flight document/page workload and cost estimate without
+      parsing any files or making LLM calls.
     """
     from src.cold_start.refresher import refresh_vtree
 
@@ -825,21 +880,32 @@ def refresh_library(
             library_path=library_path,
             target_virtual_dir=target_virtual_dir,
             update_dir_summaries=update_dir_summaries,
+            dry_run=dry_run,
         )
     except Exception as e:
         logger.error("refresh_library failed: %s", e)
         return f"Error refreshing library ({scope}): {e}"
 
+    if dry_run:
+        return f"{res.preflight_report}\n\n[Dry Run] No documents were parsed and no LLM calls were made."
+
     if not res.added_nodes and not res.repaired_nodes and not res.failed_files:
         return (
+            f"{res.preflight_report}\n\n"
             f"Library refresh complete [{scope.upper()}]: No new or inconsistent files found "
-            f"({res.already_indexed_count} file(s) already indexed in '{res.library_path}')."
+            f"({res.already_indexed_count} file(s) already indexed in '{res.library_path}', "
+            f"{res.relinked_cache_count} node(s) relinked to cached extractions at 0 cost)."
         )
 
     lines = [
+        res.preflight_report,
+        "",
         f"Library refresh complete [{scope.upper()}] ({res.vtree_path}):",
         f"- Source folder: {res.library_path}",
-        f"- Scanned: {res.scanned_count} | Already indexed: {res.already_indexed_count} | Newly added: {len(res.added_nodes)} | Repaired: {len(res.repaired_nodes)}",
+        f"- Scanned: {res.scanned_count} | Already indexed: {res.already_indexed_count} | "
+        f"Cache-relinked: {res.relinked_cache_count} | "
+        f"Newly added: {len(res.added_nodes)} ({res.new_pages_count} pages) | "
+        f"Repaired: {len(res.repaired_nodes)} ({res.repaired_pages_count} pages)",
     ]
     if res.added_nodes:
         lines.append("\nNewly Indexed Documents:")

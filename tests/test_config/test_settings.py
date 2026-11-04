@@ -51,3 +51,12 @@ def test_get_global_vtree_path_env_override(monkeypatch, tmp_path):
     monkeypatch.setenv("RA_GLOBAL_VTREE_PATH", str(custom_global))
     assert settings.get_global_vtree_path() == custom_global.resolve()
 
+
+def test_normalize_litellm_model_adds_openrouter_prefix():
+    assert settings.normalize_litellm_model("google/gemini-2.5-flash") == "openrouter/google/gemini-2.5-flash"
+    assert settings.normalize_litellm_model("qwen/qwen-2.5-72b-instruct") == "openrouter/qwen/qwen-2.5-72b-instruct"
+    assert settings.normalize_litellm_model("deepseek/deepseek-chat") == "openrouter/deepseek/deepseek-chat"
+    assert settings.normalize_litellm_model("openrouter/google/gemini-2.5-flash") == "openrouter/google/gemini-2.5-flash"
+    assert settings.normalize_litellm_model("ollama/llama3") == "ollama/llama3"
+
+

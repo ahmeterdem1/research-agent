@@ -46,9 +46,8 @@ def scan_directory(root_path: str | Path, book_threshold: int = 30) -> list[File
                         logger.info("Scanned %s: %d pages.", file_path, page_count)
                         if page_count > book_threshold:
                             is_book = True
-                            toc = doc.get_toc()
-                            if len(toc) > 0:
-                                is_splittable = True
+                            # Always splittable: uses PDF TOC when available, or fixed-page chunks as fallback
+                            is_splittable = True
                 except Exception as e:
                     logger.warning("Could not read %s: %s", file_path, e)
                     continue

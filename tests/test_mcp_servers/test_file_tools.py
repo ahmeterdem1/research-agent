@@ -312,7 +312,9 @@ def test_refresh_library_indexes_only_newly_dropped_files(monkeypatch, tmp_path)
     )
 
     out1 = file_tools.refresh_library(scope="global")
-    assert "Scanned: 3 | Already indexed: 1 | Newly added: 2" in out1
+    assert "Scanned: 3 | Already indexed: 1" in out1
+    assert "Newly added: 2" in out1
+    assert "=== VTree Refresh Pre-Flight Plan [GLOBAL] ===" in out1
     assert "NewPaperA" in out1
     assert "NewPaperB" in out1
     # Only the 2 new files were summarized; ExistingPaper was skipped!
@@ -442,6 +444,193 @@ def test_refresh_library_heals_corrupted_stub_nodes_and_user_created_dirs(monkey
 
     repaired_dir = mgr._get_node("/RLVRR")
     assert repaired_dir["summary"] == "Healed OpenRouter directory overview for RLVRR."
+
+
+def test_refresh_skips_cold_start_nodes_with_null_text_path_and_relinks_cache(monkeypatch, tmp_path):
+    """
+    Regression test for Cold-Start VTrees where `vtree_builder.py` previously omitted
+    `text_hash` and `text_path` on top-level `document` nodes even though their summaries
+    were valid and their extracted markdown existed in `cs_03_summarize.json`:
+    1. `refresh_vtree` MUST NOT treat healthy Cold-Start nodes with `text_path: None` as
+       inconsistent — 0 pages parsed, 0 LLM calls made.
+    2. If `cs_03_summarize.json` is present in `CACHE_DIR`, `refresh_vtree` relinks
+       `text_hash` and `text_path` onto those Cold-Start nodes at zero cost.
+    3. Pre-flight report (`preflight_report` / `on_preflight`) accurately reports
+       documents and page counts before any parsing occurs.
+    """
+    import json
+    from config import settings
+    from src.cold_start import refresher
+    from src.vtree.operations import VTreeManager
+    from src.vtree.store import VTreeStore
+
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    cache_dir = tmp_path / "cache"
+    texts_dir = cache_dir / "texts"
+    texts_dir.mkdir(parents=True)
+    vtree_path = tmp_path / "vtree.json"
+
+    monkeypatch.setattr(settings, "CACHE_DIR", cache_dir)
+    monkeypatch.setenv("RA_GLOBAL_VTREE_PATH", str(vtree_path))
+
+    # Create a real valid PDF in library that was already indexed during Cold Start
+    import fitz
+
+    cs_pdf = lib_dir / "Lets Verify Step By Step.pdf"
+    pdf_doc = fitz.open()
+    pdf_doc.new_page()
+    pdf_doc.save(str(cs_pdf))
+    pdf_doc.close()
+
+    cached_md = texts_dir / "abc123hash.md"
+    cached_md.write_text("# Lets Verify Step By Step\nExtracted cold start text.", encoding="utf-8")
+
+    # Write cs_03_summarize.json checkpoint in cache_dir
+    cs_checkpoint = [
+        {
+            "real_path": str(cs_pdf),
+            "text_hash": "abc123hash",
+            "text_path": str(cached_md),
+            "page_count": 29,
+            "file_type": "pdf",
+        }
+    ]
+    (cache_dir / "cs_03_summarize.json").write_text(json.dumps(cs_checkpoint), encoding="utf-8")
+
+    # VTree produced by legacy vtree_builder.py: valid summary, but text_hash=None, text_path=None
+    legacy_cs_vtree = {
+        "version": 1,
+        "library_root": str(lib_dir),
+        "root": {
+            "type": "directory",
+            "name": "Root",
+            "virtual_path": "/",
+            "summary": "Root overview.",
+            "children": [
+                {
+                    "type": "document",
+                    "name": "Lets Verify Step By Step",
+                    "virtual_path": "/Lets Verify Step By Step",
+                    "real_path": str(cs_pdf),
+                    "page_count": 29,
+                    "file_type": "pdf",
+                    "doi": None,
+                    "text_hash": None,
+                    "text_path": None,
+                    "summary": "Comprehensive Cold-Start summary of process supervision vs outcome supervision.",
+                }
+            ],
+        },
+    }
+    vtree_path.write_text(json.dumps(legacy_cs_vtree, indent=2), encoding="utf-8")
+
+    # Fail test immediately if extract_content or summarize_text is ever called!
+    monkeypatch.setattr(
+        refresher,
+        "extract_content",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("extract_content MUST NOT be called on healthy Cold-Start nodes!")),
+    )
+    monkeypatch.setattr(
+        refresher,
+        "summarize_text",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("summarize_text MUST NOT be called on healthy Cold-Start nodes!")),
+    )
+
+    preflight_captured = []
+    res = refresher.refresh_vtree(
+        scope="global",
+        vtree_path=vtree_path,
+        on_preflight=lambda report: preflight_captured.append(report),
+    )
+
+    assert len(preflight_captured) == 1
+    assert "0 document(s) to parse (~0 known PDF page(s))" in preflight_captured[0]
+    assert "Cache Relinked (Zero-Cost) : 1 document(s) linked from existing cache" in preflight_captured[0]
+    assert res.already_indexed_count == 1
+    assert res.relinked_cache_count == 1
+    assert len(res.added_nodes) == 0
+    assert len(res.repaired_nodes) == 0
+
+    # Verify text_hash and text_path were restored in vtree.json at zero cost
+    updated = VTreeStore(vtree_path).load_as_dict()
+    mgr = VTreeManager(updated)
+    doc = mgr._get_node("/Lets Verify Step By Step")
+    assert doc["text_hash"] == "abc123hash"
+    assert doc["text_path"] == str(cached_md)
+    assert doc["summary"] == "Comprehensive Cold-Start summary of process supervision vs outcome supervision."
+
+
+def test_arxiv_lucene_escaping_and_tier1_hallucinated_id_rejection(monkeypatch, tmp_path):
+    """
+    Verify:
+    1. `_escape_arxiv_lucene` escapes Lucene special characters (such as `:` in
+       `Position: The Platonic Representation Hypothesis`) with a backslash rather than stripping them.
+    2. When `stage_paper` is given a hallucinated/wrong `arxiv_id` alongside an explicit `title`,
+       Tier 1 detects the title mismatch against `arxiv_meta['title']`, rejects the wrong PDF,
+       and resolves the real paper via Tier 2 title search.
+    """
+    from config import settings
+
+    assert (
+        file_tools._escape_arxiv_lucene("Position: The Platonic Representation Hypothesis")
+        == r"Position\: The Platonic Representation Hypothesis"
+    )
+
+    monkeypatch.setattr(settings, "STAGED_DIR", tmp_path / "staged")
+    monkeypatch.setattr(settings, "CACHE_DIR", tmp_path / "cache")
+
+    def fake_lookup_arxiv(arxiv_id=None, title=None):
+        if arxiv_id == "2405.99999":
+            # Hallucinated arXiv ID points to an unrelated paper
+            return {
+                "title": "Some Unrelated Quantum Mechanics Paper",
+                "abstract": "Unrelated abstract.",
+                "authors": ["Someone Else"],
+                "arxiv_id": "2405.99999",
+                "pdf_url": "https://arxiv.org/pdf/2405.99999.pdf",
+                "doi": None,
+            }
+        if title and "Platonic Representation Hypothesis" in title:
+            return {
+                "title": "The Platonic Representation Hypothesis",
+                "abstract": "Neural networks are converging to a shared statistical model of reality.",
+                "authors": ["Minyoung Huh", "Brian Cheung", "Tongzhou Wang", "Phillip Isola"],
+                "arxiv_id": "2405.07987",
+                "pdf_url": "https://arxiv.org/pdf/2405.07987.pdf",
+                "doi": "10.48550/arXiv.2405.07987",
+            }
+        return {}
+
+    downloaded_urls = []
+
+    def fake_download_pdf(url, dest):
+        downloaded_urls.append(url)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"%PDF-1.4 real platonic pdf")
+        return True
+
+    monkeypatch.setattr(file_tools, "_lookup_arxiv_api", fake_lookup_arxiv)
+    monkeypatch.setattr(file_tools, "_download_pdf_bytes", fake_download_pdf)
+    monkeypatch.setattr(
+        file_tools,
+        "_extract_pdf_file",
+        lambda p: ("# The Platonic Representation Hypothesis\nFull text.", 26),
+    )
+
+    resolved = file_tools._resolve_paper_content(
+        url_or_arxiv_id="2405.99999",
+        temp_id="test-platonic",
+        title="Position: The Platonic Representation Hypothesis",
+    )
+
+    # Must NOT have downloaded the hallucinated 2405.99999 PDF; must have downloaded 2405.07987 via Tier 2!
+    assert downloaded_urls == ["https://arxiv.org/pdf/2405.07987.pdf"]
+    assert resolved["resolution_tier"] == "tier2_arxiv_search_pdf"
+    assert resolved["doi"] == "10.48550/arXiv.2405.07987"
+    assert resolved["page_count"] == 26
+
+
 
 
 

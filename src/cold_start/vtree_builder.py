@@ -69,8 +69,9 @@ def build_initial_vtree(files: list[dict], library_root: Path) -> dict:
             "real_path": f["real_path"],
             "summary": f["summary"]
         }
-        if "page_count" in f:
-            node["page_count"] = f["page_count"]
+        for opt_key in ("page_count", "file_type", "doi", "text_hash", "text_path"):
+            if opt_key in f:
+                node[opt_key] = f[opt_key]
         if "children" in f:
             # Need to update virtual_path of children to be relative to the book
             for c in f["children"]:

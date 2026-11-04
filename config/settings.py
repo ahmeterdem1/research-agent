@@ -61,14 +61,59 @@ DB_PATH = DATA_DIR / "research_agent.db"
 LIBRARY_ROOT_PATH = os.getenv("PATH_TO_TREE", "")
 
 # Model Configuration
-DEFAULT_AGENT_MODEL = os.getenv("DEFAULT_AGENT_MODEL", "openrouter/deepseek/deepseek-chat")
-DEFAULT_SUMMARIZATION_MODEL = os.getenv("DEFAULT_SUMMARIZATION_MODEL", "openrouter/deepseek/deepseek-chat")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+
+_DIRECT_LITELLM_PROVIDERS = {
+    "openrouter",
+    "ollama",
+    "ollama_chat",
+    "bedrock",
+    "vertex_ai",
+    "azure",
+    "huggingface",
+    "groq",
+    "together_ai",
+    "fireworks_ai",
+    "hosted_vllm",
+}
+
+
+def normalize_litellm_model(model_name: str, default: str = "openrouter/deepseek/deepseek-chat") -> str:
+    """
+    Normalize a model identifier for LiteLLM.
+    If the user specifies an OpenRouter-style `<vendor>/<model>` slug (e.g.
+    `google/gemini-2.5-flash`, `qwen/qwen-2.5-72b-instruct`, `deepseek/deepseek-chat`)
+    without the `openrouter/` prefix, automatically prepend `openrouter/` so LiteLLM
+    does not fail with `BadRequestError: LLM Provider NOT provided`.
+    """
+    cleaned = (model_name or "").strip().strip("'\"")
+    if not cleaned:
+        return default
+    if cleaned.startswith("openrouter/"):
+        return cleaned
+    parts = cleaned.split("/")
+    if len(parts) == 2 and parts[0].lower() not in _DIRECT_LITELLM_PROVIDERS:
+        return f"openrouter/{cleaned}"
+    return cleaned
+
+
+DEFAULT_AGENT_MODEL = normalize_litellm_model(
+    os.getenv("DEFAULT_AGENT_MODEL", "openrouter/deepseek/deepseek-chat"),
+    default="openrouter/deepseek/deepseek-chat",
+)
+DEFAULT_SUMMARIZATION_MODEL = normalize_litellm_model(
+    os.getenv("DEFAULT_SUMMARIZATION_MODEL", "openrouter/deepseek/deepseek-chat"),
+    default="openrouter/deepseek/deepseek-chat",
+)
 
 # Extraction Configuration
 EXTRACTOR_MODE = os.getenv("EXTRACTOR_MODE", "docling")  # 'docling' or 'llm'
-VISION_MODEL = os.getenv("VISION_MODEL", "openrouter/google/gemini-2.5-flash")
+VISION_MODEL = normalize_litellm_model(
+    os.getenv("VISION_MODEL", "openrouter/google/gemini-2.5-flash"),
+    default="openrouter/google/gemini-2.5-flash",
+)
 MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", 5))
+LLM_REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", 90))
 
 # Application Thresholds
 BOOK_PAGE_THRESHOLD = 30

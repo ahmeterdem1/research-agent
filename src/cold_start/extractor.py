@@ -3,7 +3,8 @@ from dataclasses import dataclass
 import chardet
 from docx import Document as DocxDocument
 from litellm import completion
-from tenacity import retry, stop_after_attempt, wait_exponential
+import litellm.exceptions as litellm_exc
+from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 import fitz
 import base64
 import os
@@ -94,13 +95,42 @@ def _get_ocr_semaphore() -> tuple[threading.BoundedSemaphore, int]:
     return _ocr_semaphore, max_workers
 
 
-@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=10))
+_NON_RETRYABLE_LITELLM_ERRORS = (
+    litellm_exc.BadRequestError,
+    litellm_exc.AuthenticationError,
+    litellm_exc.NotFoundError,
+    litellm_exc.PermissionDeniedError,
+)
+
+
+def _log_ocr_retry(retry_state) -> None:
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    wait_s = getattr(retry_state.next_action, "sleep", 0.0)
+    logger.warning(
+        "[LLM OCR Retry] Attempt %d/5 failed (%s: %s) — retrying in %.1fs...",
+        retry_state.attempt_number,
+        type(exc).__name__ if exc else "Error",
+        str(exc).splitlines()[0] if exc else "",
+        wait_s,
+    )
+
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_not_exception_type(_NON_RETRYABLE_LITELLM_ERRORS),
+    before_sleep=_log_ocr_retry,
+    reraise=True,
+)
 def _ocr_single_page(page_num: int, total_pages: int, img_b64: str, prompt: str, model: str) -> str:
     sem, _ = _get_ocr_semaphore()
+    normalized_model = settings.normalize_litellm_model(model, default="openrouter/google/gemini-2.5-flash")
+    req_timeout = int(getattr(settings, "LLM_REQUEST_TIMEOUT", 90))
     with sem:
-        logger.info("Processing page %d/%d", page_num + 1, total_pages)
+        logger.info("Processing page %d/%d via %s...", page_num + 1, total_pages, normalized_model)
         response = completion(
-            model=model,
+            model=normalized_model,
+            timeout=req_timeout,
             messages=[
                 {
                     "role": "user",
@@ -122,12 +152,13 @@ def extract_pdf_llm(file_path: Path) -> ExtractedContent:
     from config.prompts import get_prompts
 
     _, max_workers = _get_ocr_semaphore()
-    logger.info("[LLM OCR] Extracting %s via LLM Vision (concurrency=%d)...", file_path.name, max_workers)
+    raw_model = getattr(settings, "VISION_MODEL", settings.DEFAULT_SUMMARIZATION_MODEL)
+    model = settings.normalize_litellm_model(raw_model, default="openrouter/google/gemini-2.5-flash")
+    logger.info("[LLM OCR] Extracting '%s' via %s (concurrency=%d)...", file_path.name, model, max_workers)
 
     prompts = get_prompts()
     prompt_template = prompts["extractor"]["llm_ocr_prompt"]
     prompt = prompt_template.replace("{num_images}", "1")
-    model = getattr(settings, "VISION_MODEL", settings.DEFAULT_SUMMARIZATION_MODEL)
 
     # Render pages to base64 JPEGs sequentially on the main thread (PyMuPDF is not thread-safe)
     page_images: list[tuple[int, str]] = []
@@ -141,6 +172,7 @@ def extract_pdf_llm(file_path: Path) -> ExtractedContent:
             page_images.append((page_num, img_b64))
 
     text_parts: list[str] = [""] * len(page_images)
+    completed_count = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_idx = {
             executor.submit(_ocr_single_page, p_num, total_pages, b64, prompt, model): p_num
@@ -149,6 +181,8 @@ def extract_pdf_llm(file_path: Path) -> ExtractedContent:
         for future in concurrent.futures.as_completed(future_to_idx):
             idx = future_to_idx[future]
             text_parts[idx] = future.result()
+            completed_count += 1
+            logger.info("[LLM OCR] Completed %d/%d pages for '%s'", completed_count, total_pages, file_path.name)
 
     full_text = "\n\n".join(text_parts)
     headings = [line.strip("# ").strip() for line in full_text.split("\n") if line.startswith("#")]

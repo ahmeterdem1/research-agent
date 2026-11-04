@@ -105,3 +105,52 @@ def test_dual_scope_document_tools(monkeypatch, tmp_path):
     rpath = document_tools.get_document_real_path("/local_notes.md", scope="project")
     assert "/abs/local_notes.md" in rpath
 
+
+def test_get_document_on_book_node_returns_chapter_toc(monkeypatch, tmp_path):
+    import json
+    from src.mcp_servers import document_tools
+
+    global_vtree_file = tmp_path / "global_vtree.json"
+    global_vtree_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "library_root": str(tmp_path),
+                "root": {
+                    "type": "directory",
+                    "name": "Root",
+                    "virtual_path": "/",
+                    "summary": "Root",
+                    "children": [
+                        {
+                            "type": "book",
+                            "name": "DeepLearningBook",
+                            "virtual_path": "/DeepLearningBook",
+                            "real_path": "/abs/dl_book.pdf",
+                            "page_count": 65,
+                            "summary": "A book containing multiple sections on deep learning.",
+                            "children": [
+                                {
+                                    "type": "document",
+                                    "name": "Chapter 1 Intro",
+                                    "virtual_path": "/DeepLearningBook/Chapter 1 Intro",
+                                    "real_path": "/abs/dl_book.pdf",
+                                    "page_count": 30,
+                                    "summary": "Covers linear algebra and probability basics.",
+                                }
+                            ],
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("RA_GLOBAL_VTREE_PATH", str(global_vtree_file))
+
+    out = document_tools.get_document("/DeepLearningBook", scope="global")
+    assert "# Book: DeepLearningBook" in out
+    assert "/DeepLearningBook/Chapter 1 Intro" in out
+    assert "Covers linear algebra and probability basics." in out
+
+

@@ -396,6 +396,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_index.add_argument("--book-threshold", type=int, default=settings.BOOK_PAGE_THRESHOLD)
     p_index.add_argument("--overwrite", action="store_true", help="Rebuild from scratch")
     p_index.add_argument("--skip-organize", action="store_true", help="Skip LLM reorganization pass")
+    p_index.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only print the pre-flight workload and page-count cost plan without parsing or calling LLMs",
+    )
 
     # 4. refresh
     p_refresh = sub.add_parser(
@@ -432,12 +437,31 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help="Run the LLM semantic reorganization pass after inserting new files",
     )
+    p_refresh.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only print the verbose pre-flight workload and page-count cost plan without parsing or calling LLMs",
+    )
 
     # 5. organize
     p_org = sub.add_parser("organize", help="Run the LLM reorganization pass on an existing VTree")
     p_org.add_argument("--scope", choices=["global", "project"], default="global")
     p_org.add_argument("--vtree-path", type=str, default=None)
     p_org.add_argument("--max-turns", type=int, default=15)
+
+    # 6. rm
+    p_rm = sub.add_parser(
+        "rm",
+        help="Remove a document, book, or directory at a virtual path from the VTree and refresh ancestor summaries",
+    )
+    p_rm.add_argument("virtual_path", type=str, help="Virtual path in the VTree to remove (e.g. '/papers/123')")
+    p_rm.add_argument("--scope", choices=["global", "project"], default="global")
+    p_rm.add_argument("--vtree-path", type=str, default=None)
+    p_rm.add_argument(
+        "--no-dir-summaries",
+        action="store_true",
+        help="Skip refreshing ancestor directory summaries after removal",
+    )
 
     # 5. status
     p_status = sub.add_parser("status", help="Display global and current-project Research Agent status")
@@ -533,8 +557,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                 book_threshold=args.book_threshold,
                 overwrite=args.overwrite,
                 skip_organize=args.skip_organize,
+                dry_run=args.dry_run,
             )
-            print(f"Indexed library into VTree: {out}")
+            if not args.dry_run:
+                print(f"Indexed library into VTree: {out}")
             return 0
         except ValueError as e:
             logger.error("%s", e)
@@ -552,11 +578,18 @@ def main(argv: Optional[list[str]] = None) -> int:
                 book_threshold=args.book_threshold,
                 update_dir_summaries=not args.no_dir_summaries,
                 reorganize=args.organize,
+                dry_run=args.dry_run,
+                on_preflight=print,
             )
+            if args.dry_run:
+                print("\n[Dry Run] No documents were parsed and no LLM calls were made.")
+                return 0
             print(
-                f"Refreshed VTree [{res.scope}] ({res.vtree_path}):\n"
+                f"\nRefreshed VTree [{res.scope}] ({res.vtree_path}):\n"
                 f"  Scanned: {res.scanned_count} | Already indexed: {res.already_indexed_count} | "
-                f"Newly added: {len(res.added_nodes)} | Repaired: {len(res.repaired_nodes)}"
+                f"Cache-relinked: {res.relinked_cache_count} | "
+                f"Newly added: {len(res.added_nodes)} ({res.new_pages_count} pages) | "
+                f"Repaired: {len(res.repaired_nodes)} ({res.repaired_pages_count} pages)"
             )
             for node in res.added_nodes:
                 print(f"  + [{node.get('type', 'document')}] {node.get('virtual_path')}")
@@ -587,6 +620,34 @@ def main(argv: Optional[list[str]] = None) -> int:
         if organized is not vtree:
             vpath.write_text(json.dumps(organized, indent=2), encoding="utf-8")
             print(f"Organized VTree saved to {vpath}")
+        return 0
+
+    if args.command == "rm":
+        from src.cold_start.refresher import _refresh_dirty_directory_summaries
+        from src.vtree.operations import VTreeManager
+        from src.vtree.store import VTreeStore
+
+        if args.vtree_path:
+            vpath = Path(args.vtree_path).expanduser().resolve()
+        elif args.scope == "project":
+            vpath = settings.get_project_vtree_path(must_exist=False)
+        else:
+            vpath = settings.get_global_vtree_path()
+
+        if not vpath or not vpath.exists():
+            logger.error("No VTree found at %s", vpath)
+            return 1
+
+        store = VTreeStore(vpath)
+        vtree_dict = store.load_as_dict()
+        mgr = VTreeManager(vtree_dict)
+        msg = mgr.rm(args.virtual_path)
+        print(msg)
+        if msg.startswith("Error:"):
+            return 1
+        if not args.no_dir_summaries:
+            _refresh_dirty_directory_summaries(vtree_dict["root"])
+        store.save_dict(vtree_dict)
         return 0
 
     if args.command == "status":

@@ -97,3 +97,26 @@ def test_add_document_creates_dirs_and_bubbles_ancestors(sample_vtree):
     assert manager._get_node("/dl")["_needs_summary_update"] is True
     assert manager._get_node("/dl/transformers")["_needs_summary_update"] is True
 
+
+def test_mv_prevents_moving_into_own_subdirectory_and_marks_ancestors(sample_vtree):
+    manager = VTreeManager(sample_vtree)
+    manager.mkdir("/math/sub")
+    err = manager.mv("/math", "/math/sub/math")
+    assert "Error: Cannot move" in err
+
+    manager.mkdir("/nlp")
+    ok = manager.mv("/math/attention.pdf", "/nlp/attention.pdf")
+    assert "Successfully moved" in ok
+    assert manager._get_node("/math")["_needs_summary_update"] is True
+    assert manager._get_node("/nlp")["_needs_summary_update"] is True
+
+
+def test_rm_removes_node_and_marks_ancestors(sample_vtree):
+    manager = VTreeManager(sample_vtree)
+    res = manager.rm("/math/attention.pdf")
+    assert "Successfully removed" in res
+    assert manager._get_node("/math/attention.pdf") is None
+    assert manager._get_node("/math")["_needs_summary_update"] is True
+    assert "Error: Cannot remove root" in manager.rm("/")
+
+

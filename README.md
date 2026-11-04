@@ -58,7 +58,10 @@ ra-cli index --library-path ~/Documents/Papers --scope global
 # Or build a Project-Local VTree inside the current project
 ra-cli index --library-path ./papers --scope project
 
-# Incrementally index ONLY newly dropped files into an existing VTree (preserves custom folders)
+# Preview how many documents/PDF pages will be parsed (and estimated LLM calls) before spending API credits
+ra-cli refresh --scope global --dry-run
+
+# Incrementally index ONLY newly dropped files and heal stub summaries in an existing VTree
 ra-cli refresh --scope global
 ra-cli refresh --scope global --target-dir /Inbox
 ```

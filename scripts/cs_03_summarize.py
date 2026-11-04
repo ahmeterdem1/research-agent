@@ -22,9 +22,16 @@ def run(overwrite: bool = False):
         print(f"Error: Missing input {in_path}")
         sys.exit(1)
 
+    existing_summaries_by_path: dict[str, dict] = {}
     if out_path.exists() and not overwrite:
-        print(f"Summary file exists: {out_path} and overwrite is not set. Skipping summarization.")
-        return
+        try:
+            prev_items = json.loads(out_path.read_text(encoding="utf-8"))
+            if isinstance(prev_items, list):
+                for item in prev_items:
+                    if isinstance(item, dict) and item.get("real_path") and item.get("summary"):
+                        existing_summaries_by_path[item["real_path"]] = item
+        except Exception:
+            pass
     elif out_path.exists():
         print(f"Summary file already exists: {out_path}. Overwriting the summary file.")
         
@@ -35,6 +42,10 @@ def run(overwrite: bool = False):
     MAX_WORKERS = getattr(settings, "MAX_CONCURRENT_REQUESTS", 5)
     
     def process_leaf(node):
+        prev = existing_summaries_by_path.get(node.get("real_path", ""))
+        if prev and prev.get("summary") and prev.get("summary") != "Summary generation failed.":
+            node["summary"] = prev["summary"]
+            return
         text_path = Path(node["text_path"])
         print(f"Summarizing leaf node: {node['name']}...")
         text = robust_read(text_path)
@@ -45,6 +56,10 @@ def run(overwrite: bool = False):
             node["summary"] = "Summary generation failed."
         
     def process_book(node):
+        prev = existing_summaries_by_path.get(node.get("real_path", ""))
+        if prev and prev.get("summary") and "Summary generation failed." not in prev.get("summary", ""):
+            node["summary"] = prev["summary"]
+            return
         print(f"Summarizing book {node['name']} from its sections...")
         child_summaries = [f"{c['name']}: {c.get('summary', 'No summary')}" for c in node.get("children", [])]
         try:

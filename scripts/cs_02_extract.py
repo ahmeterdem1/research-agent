@@ -44,7 +44,7 @@ def extract_single_leaf(job, text_cache_dir):
         print(f"    Error extracting {job['name']}: {e}")
         job["result"] = None
 
-def run(book_threshold: int, overwrite: bool = False):
+def run(book_threshold: int, overwrite: bool = False, vtree_path: str | Path | None = None):
     in_path = settings.CACHE_DIR / "cs_01_scan.json"
     if not in_path.exists():
         print(f"Error: Missing input {in_path}")
@@ -53,13 +53,14 @@ def run(book_threshold: int, overwrite: bool = False):
     print(f"--- Stage 2: Extracting Text ---")
     data = json.loads(in_path.read_text(encoding="utf-8"))
     
+    target_vtree = Path(vtree_path) if vtree_path else settings.VTREE_PATH
     existing_data = {}
-    if settings.VTREE_PATH.exists() and not overwrite:
+    if target_vtree.exists() and not overwrite:
         try:
-            old_tree = json.loads(settings.VTREE_PATH.read_text(encoding="utf-8"))
+            old_tree = json.loads(target_vtree.read_text(encoding="utf-8"))
             if "root" in old_tree:
                 existing_data = extract_files_from_vtree(old_tree["root"])
-                print(f"Loaded {len(existing_data)} already processed files from vtree.")
+                print(f"Loaded {len(existing_data)} already processed files from {target_vtree}.")
         except Exception as e:
             print(f"Warning: Failed to load existing vtree: {e}")
 
@@ -171,5 +172,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--book-threshold", type=int, default=settings.BOOK_PAGE_THRESHOLD)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--vtree-path", type=str, default=None)
     args = parser.parse_args()
-    run(args.book_threshold, args.overwrite)
+    run(args.book_threshold, args.overwrite, args.vtree_path)

@@ -89,7 +89,7 @@ def get_dir_summary(
     node = manager._get_node(virtual_path)
     if not node:
         return f"Error: Path '{virtual_path}' not found in {scope} VTree."
-    if node.get("type") != "directory":
+    if node.get("type") not in ("directory", "book"):
         return f"Error: '{virtual_path}' is not a directory."
 
     return node.get("summary", "No summary available.")
@@ -190,6 +190,23 @@ def get_document(
     if node.get("type") not in ("document", "book"):
         return f"Error: '{virtual_path}' is not a document."
 
+    if node.get("type") == "book" and not node.get("text_path") and not node.get("text_hash"):
+        children = node.get("children", [])
+        if children:
+            lines = [
+                f"# Book: {node.get('name', virtual_path)}",
+                f"**Virtual Path**: `{virtual_path}`",
+                f"**Overview**: {node.get('summary', 'No summary available.')}",
+                "",
+                "This book is split into the following chapter/section documents. "
+                "Call `get_document` with the specific chapter's virtual path to read its full text:",
+            ]
+            for c in children:
+                c_vpath = c.get("virtual_path") or f"{virtual_path.rstrip('/')}/{c.get('name', '')}"
+                c_pages = f" ({c['page_count']} pages)" if c.get("page_count") else ""
+                lines.append(f"- `{c_vpath}`{c_pages}: {c.get('summary', 'No summary.')}")
+            return "\n".join(lines)
+
     text_path = node.get("text_path")
     resolved_text_path: Optional[Path] = None
     if text_path:
@@ -200,10 +217,28 @@ def get_document(
             fallback = settings.CACHE_DIR / "texts" / candidate.name
             if fallback.exists():
                 resolved_text_path = fallback
-    if resolved_text_path is None and node.get("text_hash"):
-        hash_candidate = settings.CACHE_DIR / "texts" / f"{node['text_hash']}.md"
+    text_hash = node.get("text_hash") or node.get("file_hash")
+    if resolved_text_path is None and text_hash:
+        hash_candidate = settings.CACHE_DIR / "texts" / f"{text_hash}.md"
         if hash_candidate.exists():
             resolved_text_path = hash_candidate
+
+    if resolved_text_path is None and node.get("real_path"):
+        try:
+            from src.cold_start.refresher import _load_cold_start_cache_map, _norm_path
+
+            cmap = _load_cold_start_cache_map()
+            rp = str(node["real_path"])
+            hit = cmap.get(rp) or cmap.get(_norm_path(rp))
+            if hit:
+                cand_global = settings.CACHE_DIR / "texts" / f"{hit['text_hash']}.md"
+                cand_orig = Path(hit["text_path"]) if hit.get("text_path") else None
+                if cand_global.exists():
+                    resolved_text_path = cand_global
+                elif cand_orig and cand_orig.exists():
+                    resolved_text_path = cand_orig
+        except Exception:
+            pass
 
     if resolved_text_path is None:
         return (
