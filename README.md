@@ -20,6 +20,14 @@ A local-first academic and technical research extension for [**OpenCode**](https
   - Agent can call unix-like tools on this virtual filesystem
   - Agent can organize the papers however it likes, without touching your actual pdfs
 
+### Already have some papers?
+
+- Research Agent has a cold start pipeline
+  - Provide the root of the directory
+  - Cold start generates markdowns and summaries from pdfs
+  - Builds the virtual filesystem
+  - Organizes the virtual filesystem
+
 Installed once system-wide on your PC, it equips OpenCode with:
 
 1. **Dual-Scope Virtual Document Tree (`ra_docs`)**: A decoupled semantic hierarchy (`vtree.json`) over your PDF/Markdown/DOCX textbooks and papers—supporting both a **PC-wide Global Library** (`~/.research-agent/vtrees/global.json`) and optional **Project-Local Libraries** (`<project>/.opencode/vtree.json`).
