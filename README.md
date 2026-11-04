@@ -36,7 +36,7 @@ cat << 'EOF' > ~/.research-agent/.env
 OPENROUTER_API_KEY=sk-or-v1-...
 PATH_TO_TREE=/Users/yourname/Documents/Papers
 DEFAULT_SUMMARIZATION_MODEL=openrouter/deepseek/deepseek-chat
-EXTRACTOR_MODE=docling
+EXTRACTOR_MODE=pymupdf
 EOF
 ```
 
@@ -92,7 +92,7 @@ Then launch `opencode` (or `opencode web`) in that directory and press `Tab` to 
 
 ---
 
-## Monitoring & Debugging (`ra-cli status` & `ra-cli stats`)
+## Monitoring, Testing & Debugging (`ra-cli status`, `ra-cli stats`, `ra-cli extract`)
 
 ```bash
 # View Global & Project VTree document counts, KG triplet counts, and active MCP toggles
@@ -101,13 +101,17 @@ ra-cli status
 # View detailed MCP tool & subagent telemetry, soft error rates, latency, and behavioral checks
 ra-cli stats
 ra-cli stats --all-projects --days 7 --recent 20
+
+# Manually test PDF-to-Markdown extraction on a local PDF, arXiv ID, or URL
+ra-cli extract /path/to/paper.pdf -o ./paper.md
+ra-cli extract 2405.07987 --mode pymupdf
 ```
 
 ---
 
 ## Documentation Index
 
-* **[Complete MCP Tools & Subagents Reference (`docs/TOOLS_REFERENCE.md`)](./docs/TOOLS_REFERENCE.md)** — Detailed signatures, parameters, return formats, and behavioral rules for all 25 tools across `ra_docs`, `ra_search`, `ra_ingest`, `ra_kg`, and the cold-start organizer, plus the `researcher` and `@citation-walker` agent profiles.
+* **[Complete MCP Tools & Subagents Reference (`docs/TOOLS_REFERENCE.md`)](./docs/TOOLS_REFERENCE.md)** — Detailed signatures, parameters, return formats, and behavioral rules for all 26 tools across `ra_docs`, `ra_search`, `ra_ingest`, `ra_kg`, and the cold-start organizer, plus the `researcher` and `@citation-walker` agent profiles.
 * **[CLI, Telemetry & Configuration Reference (`docs/CLI_AND_CONFIG.md`)](./docs/CLI_AND_CONFIG.md)** — Complete guide to `ra-cli` commands, environment variables, `.env` precedence, OpenCode configuration merging, and the cold-start pipeline stages.
 
 ---
@@ -117,3 +121,9 @@ ra-cli stats --all-projects --days 7 --recent 20
 ```bash
 uv run pytest tests/ -v
 ```
+
+---
+
+## Acknowledgements
+
+* The Vision LLM document-to-Markdown extraction prompt (`[extractor].llm_ocr_prompt` in [`config/prompts.toml`](./config/prompts.toml), used when `EXTRACTOR_MODE=llm`) is adapted from [**Dr. DocBench**](https://arxiv.org/abs/2606.01393).

@@ -16,7 +16,8 @@ By default, all persistent data lives in `~/.research-agent/` (overridable via `
 │   └── global.json             # Master PC-wide Virtual Document Tree
 ├── cache/
 │   ├── texts/                  # Content-addressed extracted Markdown (<sha256>.md)
-│   ├── staged/                 # Pending paper manifests (<temp_id>.json)
+│   ├── online_docs/            # Cached read_online_document texts (reused by stage_paper)
+│   ├── staged/                 # Pending paper manifests (<temp_id>.json) and PDFs (<temp_id>.pdf)
 │   ├── cs_01_scan.json         # Cold-start Stage 1 scan intermediary
 │   ├── cs_02_extract.json      # Cold-start Stage 2 extraction intermediary
 │   └── cs_03_summarize.json    # Cold-start Stage 3 summary intermediary
@@ -47,7 +48,7 @@ Implemented in [config/settings.py](file:///Users/ahmeterdem/Desktop/code/resear
 | `RA_VTREE_PATH` | `<cwd>/.opencode/vtree.json` | Override path for the Project-Local VTree JSON file. |
 | `DEFAULT_AGENT_MODEL` | `openrouter/deepseek/deepseek-chat` | Default model for agentic loops. |
 | `DEFAULT_SUMMARIZATION_MODEL` | `openrouter/deepseek/deepseek-chat` | Model used for document/directory summarization and VTree organization. |
-| `EXTRACTOR_MODE` | `docling` | PDF extraction backend: `docling` (local IBM Docling) or `llm` (Vision LLM OCR). |
+| `EXTRACTOR_MODE` | `pymupdf` | PDF extraction backend: `pymupdf` (default — instant, zero-cost local structured Markdown extraction via PyMuPDF `fitz`), `docling` (local IBM Docling layout OCR), or `llm` (Vision LLM OCR via OpenRouter using the **Dr. DocBench** extraction prompt in [`config/prompts.toml`](file:///Users/ahmeterdem/Desktop/code/research%20agent/config/prompts.toml#L40-L116)). |
 | `VISION_MODEL` | `openrouter/google/gemini-2.5-flash` | Vision model used when `EXTRACTOR_MODE=llm`. |
 | `DOCLING_DEVICE` | `auto` | Hardware accelerator for Docling (`auto`, `mps`, `cuda`, `cpu`). |
 | `MAX_CONCURRENT_REQUESTS` | `5` | Thread-pool concurrency for cold-start extraction and summarization. |
@@ -119,6 +120,9 @@ ra-cli index --library-path ~/Documents/Papers --scope global --overwrite --skip
 Incrementally scans your source folder on disk ([src/cold_start/refresher.py](file:///Users/ahmeterdem/Desktop/code/research%20agent/src/cold_start/refresher.py)), compares discovered files against `real_path` entries already in your `vtree.json`, extracts + summarizes **only** newly dropped files, and inserts them into the existing VTree without resetting custom virtual folders:
 
 ```bash
+# Preview how many new documents/pages will be parsed and estimated LLM calls without writing changes
+ra-cli refresh --scope global --dry-run
+
 # Incrementally index newly dropped PDFs into the Global VTree (uses library_root from vtree.json)
 ra-cli refresh --scope global
 
@@ -189,5 +193,23 @@ ra-cli upgrade
 ra-cli upgrade --ref main --force
 ra-cli upgrade --method homebrew
 ```
+
+### 3.9 `ra-cli extract`
+Manually runs the Research Agent's PDF/document-to-Markdown conversion pipeline ([src/cold_start/extractor.py](file:///Users/ahmeterdem/Desktop/code/research%20agent/src/cold_start/extractor.py) and [`_resolve_paper_content`](file:///Users/ahmeterdem/Desktop/code/research%20agent/src/mcp_servers/file_tools.py#L469-L645)) on any local file (`.pdf`, `.docx`, `.md`, `.txt`), arXiv ID, DOI, or URL without staging or modifying your VTree:
+
+```bash
+# Extract a local PDF to ./<stem>.md using the default extractor (pymupdf)
+ra-cli extract /path/to/paper.pdf
+
+# Specify a custom output file path
+ra-cli extract /path/to/paper.pdf -o ./extracted_paper.md
+
+# Extract directly from an arXiv ID or URL
+ra-cli extract 2405.07987 -o ./platonic_representation.md
+
+# Override the extraction backend for comparison (pymupdf, docling, or llm) or print to stdout
+ra-cli extract /path/to/paper.pdf --mode pymupdf --stdout
+```
+
 
 

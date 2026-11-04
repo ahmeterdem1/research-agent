@@ -14,7 +14,8 @@ This document catalogues every MCP server, tool function, argument signature, re
 | `ra_kg` | `ra-mcp-kg` | [src/mcp_servers/kg_tools.py](file:///Users/ahmeterdem/Desktop/code/research%20agent/src/mcp_servers/kg_tools.py) | Read and write facts in the dual-scope (`global` + `project`) SQLite Temporal Knowledge Graph. |
 
 > [!NOTE]
-> Every tool across all 4 servers is wrapped with `@track_tool("<server_name>")` from [src/telemetry/store.py](file:///Users/ahmeterdem/Desktop/code/research%20agent/src/telemetry/store.py), which automatically logs execution latency (`duration_ms`), target `scope`, active `project_id`, and whether the returned text was a success (`ok`) or soft error (`error`) to `~/.research-agent/research_agent.db`.
+> * **Telemetry**: Every tool across all 4 servers is wrapped with `@track_tool("<server_name>")` from [src/telemetry/store.py](file:///Users/ahmeterdem/Desktop/code/research%20agent/src/telemetry/store.py), which automatically logs execution latency (`duration_ms`), target `scope`, active `project_id`, and whether the returned text was a success (`ok`) or soft error (`error`) to `~/.research-agent/research_agent.db`.
+> * **Live Progress & Timing**: Long-running tools (`read_online_document`, `stage_paper`, `confirm_save_paper`, and `refresh_library`) stream live MCP progress notifications (`ctx.report_progress` / `ctx.info` via [src/mcp_servers/progress.py](file:///Users/ahmeterdem/Desktop/code/research%20agent/src/mcp_servers/progress.py)) and append an `Execution Progress & Timing` summary table so OpenCode users see step-by-step progress in real time.
 
 ---
 
@@ -30,15 +31,23 @@ def search_library(
     scope: Literal["all", "global", "project"] = "all",
 ) -> str
 ```
-* **Purpose**: Primary anti-duplication guard and fast in-memory keyword scanner across every node (`document`, `book`, `directory`) in the Virtual Tree.
-* **Matching Logic**: Case-insensitive substring match against `name`, `doi`, and LLM-generated `summary`.
+* **Purpose**: Primary anti-duplication guard and fast in-memory Lucene / BM25-style ranked search engine across every node (`document`, `book`, `directory`) in the Virtual Tree.
+* **Matching & Ranking Logic**:
+  * **Tokenized & Stemmed Ranking**: Splits multi-word queries into tokens, strips stop-words, applies morphological suffix stemming (`representations` $\leftrightarrow$ `representation`), and scores nodes across `name`/`title` (weight `3.0`), `virtual_path` (`2.0`), `doi` (`4.0`), and `summary` (`1.0`) with an exact-phrase bonus (`+5.0`).
+  * **Partial-Token Recall**: Queries with extra descriptive keywords (e.g. `"platonic representation hypothesis convergence"`) still return `"Position The Platonic Representation Hypothesis"` ranked by match ratio (`matched 3/4 terms`) instead of requiring an exact contiguous substring.
+  * **Supported Lucene Syntax**:
+    * Quoted exact phrases: `"platonic representation"`
+    * Required terms: `+convergence`
+    * Excluded terms: `-survey` or `NOT survey`
+    * Boolean `OR` / `AND`
+    * Field-scoped filters: `title:platonic`, `path:vision`, `summary:alignment`, `doi:10.48550`
 * **Parameters**:
-  * `query`: Keyword, paper title fragment, author/topic term, or DOI (e.g., `"attention is all you need"` or `"10.48550/arXiv.1706.03762"`).
+  * `query`: Keyword(s), Lucene query, paper title fragment, author/topic term, or DOI.
   * `scope`:
     * `"all"` (default): Searches the Global VTree (`~/.research-agent/vtrees/global.json`) AND, if present, the active workspace's Project VTree (`.opencode/vtree.json`).
     * `"global"`: Searches only the Global VTree.
     * `"project"`: Searches only the Project VTree.
-* **Returns**: Formatted blocks tagged with `[GLOBAL]` or `[PROJECT:<id>]`, `[document|book|directory]`, virtual path, and summary, or `"No local documents found matching query: '<query>'"`.
+* **Returns**: Ranked blocks tagged with `[GLOBAL]` or `[PROJECT:<id>]`, `[document|book|directory]`, match ratio (`matched K/N terms`), virtual path, and summary, or `"No local documents found matching query: '<query>'"`.
 * **Agent Rule**: **MUST** be called before calling `read_online_document` or `stage_paper` to avoid re-downloading papers already in the local library under arbitrary filenames.
 
 ### 1.2 `list_tree`
@@ -122,7 +131,7 @@ def duckduckgo_search(query: str, num_results: int = 5) -> str
 ```python
 def scholar_search(query: str, num_results: int = 5) -> str
 ```
-* **Purpose**: Searches Semantic Scholar (`https://api.semanticscholar.org/graph/v1/paper/search`) for academic papers matching `query`.
+* **Purpose**: Searches Semantic Scholar (`https://api.semanticscholar.org/graph/v1/paper/search`) for academic papers matching `query`. Automatically sanitizes boolean operators (`AND`, `OR`, `NOT`), field prefixes (`author:`, `year:`, `venue:`), and quotes so the Semantic Scholar relevance endpoint never returns zero results due to Lucene syntax.
 * **Returns**: Formatted blocks containing `Title`, `Paper ID`, `DOI`, `Authors`, `Year | Citations`, and `URL`.
 
 ### 2.3 `get_paper_details`
@@ -150,11 +159,15 @@ def get_paper_citations(paper_id_or_doi: str, limit: int = 10) -> str
 
 ### 2.6 `read_online_document`
 ```python
-def read_online_document(url_or_arxiv_id: str) -> str
+def read_online_document(
+    url_or_arxiv_id: str,
+    ctx: Optional[Context] = None,
+) -> str
 ```
-* **Purpose**: Fetches and extracts the full text of an online paper or web article:
-  * **If given an arXiv ID or arXiv URL** (e.g. `"1706.03762"` or `"arxiv:1706.03762"`): Downloads `https://arxiv.org/pdf/<id>.pdf` to a temporary file, extracts structured Markdown (via Docling or Vision LLM OCR per `EXTRACTOR_MODE`), cleans up the temp PDF, and returns the Markdown.
-  * **If given a standard HTTP/HTTPS URL**: Fetches the HTML and extracts clean text via `BeautifulSoup`.
+* **Purpose**: Fetches and extracts the full text of an online paper or web article while streaming live MCP progress updates:
+  * **If given an arXiv ID or arXiv URL** (e.g. `"1706.03762"` or `"arxiv:1706.03762"`): Downloads `https://arxiv.org/pdf/<id>.pdf` to a temporary file, extracts structured Markdown via `EXTRACTOR_MODE` (`pymupdf` by default for instant zero-cost local extraction, or `docling` / `llm`), caches the result under `~/.research-agent/cache/online_docs/arxiv_<id>.md`, cleans up the temp PDF, and returns the Markdown.
+  * **If given a standard HTTP/HTTPS URL**: Fetches the HTML, extracts clean text via `BeautifulSoup`, and caches it under `~/.research-agent/cache/online_docs/url_<sha256>.md`.
+* **Zero-Cost Staging Reuse**: Any document read via `read_online_document` is automatically reused from `~/.research-agent/cache/online_docs/` if the user subsequently asks to save it via `stage_paper`, avoiding any duplicate download or PDF re-extraction.
 * **Agent Rule**: Must only be called *after* `ra_docs_search_library` confirms the paper is not already stored locally.
 
 ### 2.7 `walk_citation_graph`
@@ -178,26 +191,32 @@ def stage_paper(
     title: Optional[str] = None,
     doi: Optional[str] = None,
     preextracted_text: Optional[str] = None,
+    ctx: Optional[Context] = None,
 ) -> str
 ```
-* **Purpose**: Phase 1 of saving a paper. Runs a **4-Tier Content & PDF Resolution Cascade** (1. Direct arXiv PDF, 2. Academic API lookup via arXiv Search / OpenAlex / Semantic Scholar by `title` or `doi`, 3. Direct HTTP PDF / `<meta name="citation_pdf_url">`, 4. Structured Metadata + Abstract + TLDR fallback when behind a captcha/paywall), caches the extracted Markdown in `~/.research-agent/cache/texts/<sha256>.md`, stages any downloaded PDF in `~/.research-agent/cache/staged/<temp_id>.pdf`, and summarizes the document using `summarize_text()` (`DEFAULT_SUMMARIZATION_MODEL` on OpenRouter).
+* **Purpose**: Phase 1 of saving a paper. Runs a **4-Tier Content & PDF Resolution Cascade** (0. Instant reuse from `preextracted_text` or `~/.research-agent/cache/online_docs/`, 1. Direct arXiv PDF, 2. Academic API lookup via arXiv Search with Lucene special-character escaping / OpenAlex / Semantic Scholar by `title` or `doi`, 3. Direct HTTP PDF / `<meta name="citation_pdf_url">`, 4. Structured Metadata + Abstract + TLDR fallback when behind a captcha/paywall), caches the extracted Markdown in `~/.research-agent/cache/texts/<sha256>.md`, stages any downloaded PDF in `~/.research-agent/cache/staged/<temp_id>.pdf`, and summarizes the document using `summarize_text()` (`DEFAULT_SUMMARIZATION_MODEL` on OpenRouter).
+* **Live Progress & Sequential Batching**: Emits step-by-step MCP progress notifications (`[1/4] -> [4/4]`) and appends an `Execution Progress & Timing` table. When staging multiple papers, agents are instructed to call `stage_paper` sequentially one paper at a time and output a `[k/N]` status line between calls.
 * **Parameters**:
   * `url_or_arxiv_id`: Source URL, arXiv ID (e.g. `"2601.18533"`), or DOI.
   * `target_virtual_dir`: Destination directory in the VTree (e.g. `"/nlp/RLHF/RLVRR"`). Intermediate directories are created automatically on confirmation.
   * `target_scope`: `"global"` (default — targets `~/.research-agent/vtrees/global.json`) or `"project"` (targets `<project>/.opencode/vtree.json`).
   * `title`: Clean paper title (strongly recommended when `url_or_arxiv_id` is a conference landing page like `iclr.cc` or `openreview.net` so Tier 2 can locate the open-access PDF).
   * `doi`: Optional DOI of the paper.
-* **Returns**: Staging confirmation with `ID: <temp_id>`, resolution tier, target scope/path, the OpenRouter-generated summary, and the instruction to **STOP EXECUTION NOW** and ask the user for approval.
+  * `preextracted_text`: Optional Markdown text already extracted earlier in the session to bypass re-downloading.
+* **Returns**: Staging confirmation with `ID: <temp_id>`, resolution tier, target scope/path, the OpenRouter-generated summary, `Execution Progress & Timing` breakdown, and the instruction to **STOP EXECUTION NOW** and ask the user for approval.
 
 ### 3.2 `confirm_save_paper`
 ```python
-def confirm_save_paper(temp_id: str) -> str
+def confirm_save_paper(
+    temp_id: str,
+    ctx: Optional[Context] = None,
+) -> str
 ```
 * **Purpose**: Phase 2 of saving a paper. Protected by `"ra_ingest_confirm_save_paper": "ask"` in OpenCode's permission engine.
 * **Behavior**:
   1. Pops the staged manifest from `~/.research-agent/cache/staged/<temp_id>.json`.
   2. Moves any staged PDF (`~/.research-agent/cache/staged/<temp_id>.pdf`) into a single flat folder at `<library_root>/Downloaded/<title>.pdf` and points `real_path` to that file.
-  3. Loads (or initializes) the target `vtree.json` (`global` or `project`), inserts the `VDocument` node into `target_virtual_dir`, and refreshes all newly created or modified ancestor directory summaries via OpenRouter (`summarize_directory()`).
+  3. Loads (or initializes) the target `vtree.json` (`global` or `project`), inserts the `VDocument` node into `target_virtual_dir`, and refreshes all newly created or modified ancestor directory summaries via OpenRouter (`summarize_directory()`), reporting step progress per directory.
   4. Atomically writes the updated `vtree.json` to disk.
 
 ### 3.3 `refresh_library`
@@ -207,6 +226,7 @@ def refresh_library(
     library_path: Optional[str] = None,
     target_virtual_dir: Optional[str] = None,
     update_dir_summaries: bool = True,
+    ctx: Optional[Context] = None,
 ) -> str
 ```
 * **Purpose**: Incrementally scans the source library folder on disk and indexes **only newly dropped** PDF, TXT, MD, or DOCX files that are not yet present in the target VTree (`global` or `project`).
@@ -256,14 +276,40 @@ Backed by: [src/kg/schema.py](file:///Users/ahmeterdem/Desktop/code/research%20a
 
 ---
 
-### 4.1 `add_triplet`
+### 4.1 `remember_user_fact`
+```python
+def remember_user_fact(
+    fact: str,
+    category: Literal[
+        "background",
+        "interest",
+        "preference",
+        "argument",
+        "mistake",
+        "read_paper",
+    ] = "interest",
+    scope: Literal["global", "project"] = "global",
+    context: Optional[str] = None,
+) -> str
+```
+* **Purpose**: High-priority, single-call tool for proactively persisting user facts during conversation without needing to look up ontology class or relation names.
+* **Automatic Category Mapping**:
+  * `"background"` $\rightarrow$ `User --has_fact--> PersonalFact`
+  * `"interest"` $\rightarrow$ `User --interested_in--> Topic`
+  * `"preference"` $\rightarrow$ `User --prefers--> Preference`
+  * `"argument"` $\rightarrow$ `User --argued_that--> Argument`
+  * `"mistake"` $\rightarrow$ `User --made_mistake--> Mistake`
+  * `"read_paper"` $\rightarrow$ `User --has_read--> Paper`
+* **Agent Rule**: Automatically called whenever the user reveals their background, research interests, preferences, hypotheses/arguments, misconceptions, or papers they have read.
+
+### 4.2 `add_triplet`
 ```python
 def add_triplet(
     subject: str,
     relation: str,
     object: str,
-    object_class: str,
-    subject_class: str = "User",
+    object_class: Optional[str] = None,
+    subject_class: Optional[str] = None,
     scope: Literal["global", "project"] = "global",
     confidence: float = 1.0,
     ttl_seconds: Optional[int] = None,
@@ -272,10 +318,11 @@ def add_triplet(
 ) -> str
 ```
 * **Purpose**: Asserts a fact `(subject, subject_class) --relation--> (object, object_class)` in either `global` or `project` scope.
+* **Auto-Inferred Classes**: When `object_class` or `subject_class` is omitted (`None`), `KGStore.add_triplet` automatically infers the expected `domain` (`subject_class`) and `range` (`object_class`) from `relation`'s registered ontology definition (defaulting `subject_class` to `"User"` if `subject.lower() == "user"`).
 * **Deduplication & Refresh**: Entity and ontology names are case-insensitive (`COLLATE NOCASE`). Re-asserting an existing live triplet within the same `(scope, project_id)` refreshes its `confidence`, `context`, `ttl_seconds`, and `updated_at` in place rather than creating a duplicate.
 * **Validation**: Enforces that `subject_class`, `object_class`, and `relation` exist in the ontology and satisfy the relation's `domain` and `range`. Returns actionable `"Error: ..."` messages listing valid alternatives when violated.
 
-### 4.2 `query_kg`
+### 4.3 `query_kg`
 ```python
 def query_kg(
     subject: Optional[str] = None,
@@ -295,7 +342,7 @@ def query_kg(
   * `scope="project"`: Returns only facts for the active project.
 * **Temporal Liveness**: By default (`include_inactive=False`), only returns facts where `is_active = 1` and `expires_at` has not passed. Setting `include_inactive=True` includes expired and retracted facts with their `INACTIVE (<reason>)` badge.
 
-### 4.3 `update_triplet`
+### 4.4 `update_triplet`
 ```python
 def update_triplet(
     triplet_id: int,
@@ -309,13 +356,13 @@ def update_triplet(
 * **Purpose**: Updates metadata or scope on an existing live triplet (`[#id]`).
 * **Scope Promotion / Demotion**: Passing `scope="global"` promotes a project-local fact to permanent global memory (`project_id = NULL`); passing `scope="project"` restricts a global fact to the active project.
 
-### 4.4 `retract_triplet`
+### 4.5 `retract_triplet`
 ```python
 def retract_triplet(triplet_id: int, reason: str) -> str
 ```
 * **Purpose**: Soft-deletes a triplet (`is_active = 0`, `invalidated_reason = reason`), removing it from active queries and the user profile while preserving it in historical queries (`include_inactive=True`).
 
-### 4.5 `get_user_profile_summary`
+### 4.6 `get_user_profile_summary`
 ```python
 def get_user_profile_summary(
     scope: Literal["all", "global", "project"] = "all",
@@ -325,7 +372,7 @@ def get_user_profile_summary(
   1. `# Global User Profile (Applies Across All Projects)`
   2. `# Current Project Profile (project: <active_project_id>)`
 
-### 4.6 `search_entities`
+### 4.7 `search_entities`
 ```python
 def search_entities(
     query: str,
@@ -333,9 +380,9 @@ def search_entities(
     limit: int = 20,
 ) -> str
 ```
-* **Purpose**: Case-insensitive substring search (`LIKE %query%`) over entity names so the agent can discover exact canonical names before calling `query_kg` or `add_triplet`.
+* **Purpose**: Case-insensitive search over entity names so the agent can discover canonical names before calling `query_kg` or `add_triplet`. Automatically falls back to multi-token matching (`OR` across query words, ranked by token hit count) when an exact contiguous substring match returns no entities.
 
-### 4.7 `get_related_facts`
+### 4.8 `get_related_facts`
 ```python
 def get_related_facts(
     entity: str,
@@ -345,13 +392,13 @@ def get_related_facts(
 ```
 * **Purpose**: Breadth-first graph neighbourhood traversal (up to 3 hops, walking edges in both directions) starting from `entity`, respecting liveness and `scope` isolation.
 
-### 4.8 `get_ontology`
+### 4.9 `get_ontology`
 ```python
 def get_ontology() -> str
 ```
 * **Purpose**: Lists all registered ontology classes and relations (with their `domain -> range` constraints).
 
-### 4.9 `extend_ontology`
+### 4.10 `extend_ontology`
 ```python
 def extend_ontology(
     kind: Literal["class", "relation"],

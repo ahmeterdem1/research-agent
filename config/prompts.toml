@@ -38,6 +38,7 @@ user_prompt_start = "Please organize the virtual tree starting from the root ('/
 user_prompt_remind = "Please use the tools provided to organize the tree, or call `finish` if you are done."
 
 [extractor]
+# Adapted from the Dr. DocBench document-to-Markdown OCR benchmark prompt.
 llm_ocr_prompt = """
 You are an AI assistant specialized in converting document images to Markdown format. You are given {num_images} consecutive page image(s). Convert all pages in order into a single continuous Markdown document. Please follow these instructions for the conversion:
 1. Text Processing:
