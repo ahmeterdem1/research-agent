@@ -304,10 +304,10 @@ class KGStore:
     def add_triplet(
         self,
         subject: str,
-        subject_class: str,
+        subject_class: Optional[str],
         relation: str,
         object_: str,
-        object_class: str,
+        object_class: Optional[str] = None,
         confidence: float = 1.0,
         ttl_seconds: Optional[int] = None,
         context: Optional[str] = None,
@@ -320,6 +320,10 @@ class KGStore:
         """
         Assert a fact in either the 'global' or 'project' scope. Returns (triplet, created).
 
+        If ``subject_class`` or ``object_class`` is omitted (``None`` or ``""``), it is
+        automatically inferred from the ontology relation's ``domain`` / ``range`` (defaulting
+        ``subject_class`` to ``"User"`` when ``subject`` is ``"User"``).
+
         If an identical live (subject, relation, object) fact already exists in the
         same (scope, project_id) it is refreshed in place and ``created`` is False.
         """
@@ -331,8 +335,17 @@ class KGStore:
 
         with connect(self.db_path) as conn:
             rel = self._get_relation(conn, relation)
-            s_cls = self._canonical_class(conn, subject_class)
-            o_cls = self._canonical_class(conn, object_class)
+            raw_s_cls = (subject_class or "").strip()
+            if not raw_s_cls:
+                raw_s_cls = "User" if subject.strip().lower() == "user" else (rel["domain"] or "User")
+            raw_o_cls = (object_class or "").strip() or (rel["range"] or "")
+            if not raw_o_cls:
+                raise KGError(
+                    f"Relation '{rel['name']}' has no default object class; please provide object_class explicitly."
+                )
+
+            s_cls = self._canonical_class(conn, raw_s_cls)
+            o_cls = self._canonical_class(conn, raw_o_cls)
 
             if rel["domain"] and rel["domain"].lower() != s_cls.lower():
                 raise KGError(

@@ -39,14 +39,113 @@ def get_store() -> KGStore:
     return _store
 
 
+_USER_CATEGORY_MAP: dict[str, tuple[str, str, str]] = {
+    # category / alias -> (relation, object_class, default_scope)
+    "background": ("has_fact", "PersonalFact", "global"),
+    "personal_fact": ("has_fact", "PersonalFact", "global"),
+    "has_fact": ("has_fact", "PersonalFact", "global"),
+    "interest": ("interested_in", "Topic", "global"),
+    "topic": ("interested_in", "Topic", "global"),
+    "interested_in": ("interested_in", "Topic", "global"),
+    "preference": ("prefers", "Preference", "global"),
+    "prefers": ("prefers", "Preference", "global"),
+    "argument": ("argued_that", "Argument", "project"),
+    "hypothesis": ("argued_that", "Argument", "project"),
+    "argued_that": ("argued_that", "Argument", "project"),
+    "mistake": ("made_mistake", "Mistake", "global"),
+    "made_mistake": ("made_mistake", "Mistake", "global"),
+    "read_paper": ("has_read", "Paper", "global"),
+    "paper": ("has_read", "Paper", "global"),
+    "has_read": ("has_read", "Paper", "global"),
+}
+
+
+@mcp.tool()
+@track_tool("ra_kg")
+def remember_user_fact(
+    category: Literal[
+        "background",
+        "interest",
+        "preference",
+        "argument",
+        "mistake",
+        "read_paper",
+    ],
+    fact: str,
+    scope: Optional[Literal["global", "project"]] = None,
+    context: Optional[str] = None,
+    confidence: float = 1.0,
+    ttl_seconds: Optional[int] = None,
+    properties: Optional[dict] = None,
+) -> str:
+    """
+    PROACTIVE CONVERSATIONAL MEMORY TOOL — Call this tool AUTOMATICALLY (without waiting for the
+    user to ask) whenever the user reveals any information about themselves during the conversation!
+
+    WHEN TO CALL THIS TOOL IMMEDIATELY:
+    - `category="background"` (`has_fact`, default `scope="global"`):
+      The user mentions their academic role, degree/thesis, expertise, institution, or background
+      (e.g., "I am a PhD student in NLP", "I already know PPO and DPO well").
+    - `category="interest"` (`interested_in`, default `scope="global"`):
+      The user expresses interest in or asks for literature on a research topic
+      (e.g., "Mechanistic Interpretability", "Reward Hacking in RLHF").
+    - `category="preference"` (`prefers`, default `scope="global"`):
+      The user states how they like explanations, tools, or workflows
+      (e.g., "Prefers concise mathematical derivations", "Uses PyTorch").
+    - `category="argument"` (`argued_that`, default `scope="project"`):
+      The user proposes a hypothesis, claim, or design opinion in the current discussion
+      (e.g., "Coarse grading rubrics cause reward hacking").
+    - `category="mistake"` (`made_mistake`, default `scope="global"`):
+      The user had a factual misconception that was clarified during the chat.
+    - `category="read_paper"` (`has_read`, default `scope="global"`):
+      The user mentions having read a paper, or finishes reading/discussing a paper in this chat.
+
+    Arguments:
+    - category: One of `"background"`, `"interest"`, `"preference"`, `"argument"`, `"mistake"`, `"read_paper"`.
+    - fact: Concise, canonical statement of the fact, topic, preference, hypothesis, or paper title.
+    - scope: Optional `"global"` (applies across all projects) or `"project"` (only this workspace).
+      If omitted, defaults automatically (`"project"` for `"argument"`, `"global"` for all others).
+    - context: Optional 1-sentence quote or reason from the conversation.
+    - confidence: 0.0–1.0 (use `1.0` when stated by the user, `< 1.0` when inferred).
+    - ttl_seconds: Optional expiry in seconds ONLY for temporary facts (e.g., `604800` for a 1-week deadline).
+    - properties: Optional metadata dict (e.g., `{"doi": "...", "virtual_path": "/..."}` for `"read_paper"`).
+    """
+    key = (category or "").strip().lower()
+    if key not in _USER_CATEGORY_MAP:
+        valid = ", ".join(["background", "interest", "preference", "argument", "mistake", "read_paper"])
+        return f"Error: Unknown category '{category}'. Choose one of: {valid}."
+
+    relation, object_class, default_scope = _USER_CATEGORY_MAP[key]
+    effective_scope = scope or default_scope
+    try:
+        triplet, created = get_store().add_triplet(
+            subject=USER_CLASS_NAME,
+            subject_class=USER_CLASS_NAME,
+            relation=relation,
+            object_=fact,
+            object_class=object_class,
+            scope=effective_scope,
+            confidence=confidence,
+            ttl_seconds=ttl_seconds,
+            context=context,
+            source_chat=CURRENT_SESSION_ID.get(),
+            object_properties=properties,
+        )
+    except KGError as e:
+        logger.warning("remember_user_fact validation error: %s", e)
+        return f"Error: {e}"
+    verb = "Recorded new fact" if created else "Fact already known; refreshed"
+    return f"{verb}: {triplet.to_line()}"
+
+
 @mcp.tool()
 @track_tool("ra_kg")
 def add_triplet(
-    subject: str,
-    relation: str,
-    object: str,
-    object_class: str,
-    subject_class: str = USER_CLASS_NAME,
+    subject: str = USER_CLASS_NAME,
+    relation: str = "interested_in",
+    object: str = "",
+    object_class: Optional[str] = None,
+    subject_class: Optional[str] = None,
     scope: Literal["global", "project"] = "global",
     confidence: float = 1.0,
     ttl_seconds: Optional[int] = None,
@@ -54,28 +153,41 @@ def add_triplet(
     object_properties: Optional[dict] = None,
 ) -> str:
     """
-    Records a fact in the long-term Knowledge Graph as (subject) --relation--> (object),
-    tagged with either `scope="global"` or `scope="project"`.
+    PROACTIVE MEMORY & LITERATURE GRAPH TOOL — Records a structured fact `(subject) --relation--> (object)`
+    in the long-term Knowledge Graph (`scope="global"` or `scope="project"`).
 
-    IMPORTANT — Choosing `scope`:
-    - `scope="global"` (default): Use for facts that remain true across ALL projects on the user's PC:
-      * User background (`has_fact`), e.g. academic role, expertise, institution.
-      * Papers the user has read (`has_read`) — reading a paper is a permanent global fact.
-      * Enduring research interests (`interested_in`) and general workflow preferences (`prefers`).
-      * Foundational conceptual mistakes (`made_mistake` / `corrected_by`).
-      * Objective literature relationships (`Paper --covers--> Concept`, `Topic --related_to--> Topic`).
-    - `scope="project"`: Use for facts that apply ONLY to the current project/workspace:
-      * Working hypotheses or project-specific claims (`argued_that`).
-      * Project-specific tool, library, or dataset choices (`prefers`).
-      * Narrow topics explored strictly for this project's task (`interested_in`).
+    Call this tool (or `remember_user_fact`) AUTOMATICALLY during conversation whenever:
+    1. The user shares personal background, research interests, preferences, hypotheses, mistakes,
+       or papers they have read (`subject="User"`).
+    2. You discover important objective relationships between papers, concepts, and topics
+       (`Paper --covers--> Concept`, `Paper --references--> Paper`, `Topic --related_to--> Topic`).
+
+    BUILT-IN RELATIONS (Note: `subject_class` and `object_class` are AUTO-INFERRED if omitted!):
+    - User Facts (`subject="User"`, `subject_class="User"`):
+      * `has_fact`      -> `object_class="PersonalFact"` (background, role, expertise — `scope="global"`)
+      * `interested_in` -> `object_class="Topic"`        (research topics of interest — `scope="global"`)
+      * `prefers`       -> `object_class="Preference"`   (workflow/style/tool preferences — `scope="global"` or `"project"`)
+      * `argued_that`   -> `object_class="Argument"`     (user's hypothesis or claim — usually `scope="project"`)
+      * `made_mistake`  -> `object_class="Mistake"`      (misconception held by user — `scope="global"`)
+      * `has_read`      -> `object_class="Paper"`        (paper the user has read — `scope="global"`)
+    - Literature & Concept Facts (`scope="global"`):
+      * `covers`        (`subject_class="Paper"`    -> `object_class="Concept"`)
+      * `references`    (`subject_class="Paper"`    -> `object_class="Paper"`)
+      * `related_to`    (`subject_class="Topic"`    -> `object_class="Topic"`)
+      * `contradicts`   (`subject_class="Argument"` -> `object_class="Argument"`)
+      * `corrected_by`  (`subject_class="Mistake"`  -> `object_class="Argument"`)
 
     Arguments:
-    - subject: Use "User" for the human user. Otherwise a concise canonical entity name.
-    - object: A short, canonical, reusable name (e.g. "Reinforcement Learning"). Reuse existing names.
-    - confidence: 0.0-1.0. Use < 1.0 when inferred rather than explicitly stated.
-    - ttl_seconds: Set ONLY for transient facts (e.g. "preparing for a deadline this week" -> 604800).
+    - subject: Defaults to `"User"`. For literature facts, pass the Paper, Topic, or Argument name.
+    - relation: One of the relation names above (or a custom relation added via `extend_ontology`).
+    - object: Short, canonical, reusable entity name (e.g. `"Reinforcement Learning"`).
+    - object_class: Optional! Automatically inferred from `relation` for all built-in relations above.
+    - subject_class: Optional! Automatically inferred (`"User"` when `subject="User"`, or from `relation`).
+    - scope: `"global"` (default, true across all projects) or `"project"` (only current workspace).
+    - confidence: 0.0–1.0 (`1.0` when explicit, `< 1.0` when inferred).
+    - ttl_seconds: Set ONLY for transient facts (e.g. `604800` for a 1-week deadline).
     - context: One sentence of justification or a short quote from the user.
-    - object_properties: Optional extra attributes, e.g. {"virtual_path": "/ML/attention", "doi": "..."}.
+    - object_properties: Optional extra attributes, e.g. `{"virtual_path": "/ML/attention", "doi": "..."}`.
     """
     try:
         triplet, created = get_store().add_triplet(
@@ -197,7 +309,10 @@ def retract_triplet(triplet_id: int, reason: str) -> str:
 @track_tool("ra_kg")
 def get_user_profile_summary(scope: Literal["all", "global", "project"] = "all") -> str:
     """
-    Returns what is currently known about the user, separated into:
+    SESSION-START MEMORY LOADER — Call this tool at the beginning of a conversation (or before
+    answering research/important questions) to load what is already known about the user!
+
+    Returns the user's profile separated into:
     1. `# Global User Profile (Applies Across All Projects)` — permanent background, reading
        history, long-term interests, and general preferences.
     2. `# Current Project Profile (project: <name>)` — hypotheses, arguments, and preferences

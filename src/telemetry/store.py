@@ -197,6 +197,20 @@ class TelemetryStore:
             + tool_counts.get("get_paper_citations", 0)
             + tool_counts.get("walk_citation_graph", 0)
         )
+        kg_read_calls = (
+            tool_counts.get("get_user_profile_summary", 0)
+            + tool_counts.get("query_kg", 0)
+            + tool_counts.get("search_entities", 0)
+            + tool_counts.get("get_related_facts", 0)
+            + tool_counts.get("get_ontology", 0)
+        )
+        kg_write_calls = (
+            tool_counts.get("remember_user_fact", 0)
+            + tool_counts.get("add_triplet", 0)
+            + tool_counts.get("update_triplet", 0)
+            + tool_counts.get("retract_triplet", 0)
+            + tool_counts.get("extend_ontology", 0)
+        )
         external_fetches = online_reads + stage_calls
 
         return {
@@ -216,6 +230,8 @@ class TelemetryStore:
                 "citation_walk_calls": citation_walk_calls,
                 "paper_stage_calls": stage_calls,
                 "paper_confirm_calls": confirm_calls,
+                "kg_read_calls": kg_read_calls,
+                "kg_write_calls": kg_write_calls,
                 "local_first_compliant": (external_fetches == 0) or (local_searches >= external_fetches),
             },
             "recent": [dict(r) for r in recent_rows],
@@ -264,6 +280,8 @@ def format_telemetry_summary(summary: dict[str, Any]) -> str:
             f"  - Citation Walk Activity (ref/cit/walk calls)      : {diag['citation_walk_calls']}",
             f"  - Paper Ingestion Gate (`stage` vs `confirm`)      : "
             f"{diag['paper_stage_calls']} staged / {diag['paper_confirm_calls']} confirmed",
+            f"  - Knowledge Graph Memory (`read` vs `write` calls) : "
+            f"{diag.get('kg_read_calls', 0)} read(s) / {diag.get('kg_write_calls', 0)} write(s)",
         ]
     )
 

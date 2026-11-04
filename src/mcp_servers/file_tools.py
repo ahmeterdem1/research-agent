@@ -32,6 +32,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from config import settings
 from config.settings import get_logger
 from src.cold_start.summarizer import summarize_text
+from src.mcp_servers.progress import StepTracker, report_mcp_progress
 from src.telemetry.store import track_tool
 from src.vtree.operations import VTreeManager
 from src.vtree.store import VTreeStore
@@ -146,7 +147,11 @@ def _download_pdf_bytes(pdf_url: str, dest_path: Path) -> bool:
         return False
 
 
-def _extract_pdf_file(pdf_path: Path) -> tuple[Optional[str], Optional[int]]:
+def _extract_pdf_file(
+    pdf_path: Path,
+    tracker: Optional[StepTracker] = None,
+    label: Optional[str] = None,
+) -> tuple[Optional[str], Optional[int]]:
     """Extract Markdown text and page count from a local PDF file."""
     page_count: Optional[int] = None
     fallback_text_parts: list[str] = []
@@ -159,6 +164,13 @@ def _extract_pdf_file(pdf_path: Path) -> tuple[Optional[str], Optional[int]]:
                 fallback_text_parts.append(page.get_text("text"))
     except Exception as e:
         logger.warning("PyMuPDF inspection failed for %s: %s", pdf_path, e)
+
+    mode = getattr(settings, "EXTRACTOR_MODE", "docling").lower()
+    mode_label = "Vision LLM OCR" if mode == "llm" else "Docling"
+    doc_label = label or pdf_path.name
+    if tracker is not None:
+        pg_info = f"{page_count} pages" if page_count is not None else "PDF"
+        tracker.step(f"Extracting {pg_info} via {mode_label} for '{doc_label}'...")
 
     try:
         from src.cold_start.extractor import extract_content
@@ -436,6 +448,7 @@ def _resolve_paper_content(
     title: Optional[str] = None,
     doi: Optional[str] = None,
     preextracted_text: Optional[str] = None,
+    tracker: Optional[StepTracker] = None,
 ) -> dict:
     """
     Execute the 4-Tier Paper Resolution Cascade to obtain:
@@ -448,7 +461,14 @@ def _resolve_paper_content(
     resolved_doi = doi.strip() if doi and doi.strip() else None
     metadata_pool: list[dict] = []
 
+    if tracker is not None:
+        tracker.step(
+            f"Resolving paper source & metadata for '{resolved_title or url_or_arxiv_id}'..."
+        )
+
     if preextracted_text and preextracted_text.strip():
+        if tracker is not None:
+            tracker.step("Using caller-provided pre-extracted text (0 pages to parse)...")
         return {
             "title": _derive_name(url_or_arxiv_id, resolved_title),
             "doi": resolved_doi,
@@ -498,6 +518,10 @@ def _resolve_paper_content(
                             page_count = doc.page_count
                     except Exception:
                         pass
+                    if tracker is not None:
+                        tracker.step(
+                            f"Reused cached extraction for arXiv:{arxiv_id} ({page_count or '?'} pages, 0 pages re-parsed)..."
+                        )
                     logger.info("Reused cached online_docs extraction for arXiv %s (0 pages re-parsed)", arxiv_id)
                     return {
                         "title": _derive_name(url_or_arxiv_id, resolved_title),
@@ -510,7 +534,9 @@ def _resolve_paper_content(
 
             arxiv_pdf_url = arxiv_meta.get("pdf_url") or f"https://arxiv.org/pdf/{arxiv_id}.pdf"
             if _download_pdf_bytes(arxiv_pdf_url, staged_pdf):
-                extracted_md, page_count = _extract_pdf_file(staged_pdf)
+                extracted_md, page_count = _extract_pdf_file(
+                    staged_pdf, tracker=tracker, label=resolved_title or f"arXiv:{arxiv_id}"
+                )
                 if extracted_md:
                     return {
                         "title": _derive_name(url_or_arxiv_id, resolved_title),
@@ -528,7 +554,9 @@ def _resolve_paper_content(
         resolved_title = resolved_title or url_info.get("title")
         resolved_doi = resolved_doi or url_info.get("doi")
         if url_info.get("pdf_downloaded") and staged_pdf.exists():
-            extracted_md, page_count = _extract_pdf_file(staged_pdf)
+            extracted_md, page_count = _extract_pdf_file(
+                staged_pdf, tracker=tracker, label=resolved_title or url_or_arxiv_id
+            )
             if extracted_md:
                 return {
                     "title": _derive_name(url_or_arxiv_id, resolved_title),
@@ -548,7 +576,9 @@ def _resolve_paper_content(
                 metadata_pool.append(ax_by_title)
                 resolved_doi = resolved_doi or ax_by_title.get("doi")
                 if ax_by_title.get("pdf_url") and _download_pdf_bytes(ax_by_title["pdf_url"], staged_pdf):
-                    extracted_md, page_count = _extract_pdf_file(staged_pdf)
+                    extracted_md, page_count = _extract_pdf_file(
+                        staged_pdf, tracker=tracker, label=resolved_title or ax_by_title.get("title")
+                    )
                     if extracted_md:
                         return {
                             "title": _derive_name(url_or_arxiv_id, resolved_title or ax_by_title.get("title")),
@@ -566,7 +596,9 @@ def _resolve_paper_content(
             resolved_title = resolved_title or oa_meta.get("title")
             resolved_doi = resolved_doi or oa_meta.get("doi")
             if oa_meta.get("pdf_url") and _download_pdf_bytes(oa_meta["pdf_url"], staged_pdf):
-                extracted_md, page_count = _extract_pdf_file(staged_pdf)
+                extracted_md, page_count = _extract_pdf_file(
+                    staged_pdf, tracker=tracker, label=resolved_title
+                )
                 if extracted_md:
                     return {
                         "title": _derive_name(url_or_arxiv_id, resolved_title),
@@ -584,7 +616,9 @@ def _resolve_paper_content(
             resolved_title = resolved_title or s2_meta.get("title")
             resolved_doi = resolved_doi or s2_meta.get("doi")
             if s2_meta.get("pdf_url") and _download_pdf_bytes(s2_meta["pdf_url"], staged_pdf):
-                extracted_md, page_count = _extract_pdf_file(staged_pdf)
+                extracted_md, page_count = _extract_pdf_file(
+                    staged_pdf, tracker=tracker, label=resolved_title
+                )
                 if extracted_md:
                     return {
                         "title": _derive_name(url_or_arxiv_id, resolved_title),
@@ -597,6 +631,10 @@ def _resolve_paper_content(
 
     # --- Tier 4: Rich Metadata + Abstract + Web Text Fallback ---
     final_title = _derive_name(url_or_arxiv_id, resolved_title)
+    if tracker is not None:
+        tracker.step(
+            f"Synthesizing metadata & abstract fallback for '{final_title}' (no direct PDF found)..."
+        )
     best_abstract = ""
     best_tldr = ""
     best_authors: list[str] = []
@@ -659,10 +697,23 @@ def stage_paper(
       like `iclr.cc` or `openreview.net` so `stage_paper` can find the open-access PDF via arXiv/OpenAlex).
     - doi: Optional DOI of the paper.
 
-    CRITICAL INSTRUCTION: After calling this tool and receiving the summary, you MUST halt your execution,
-    show the paper summary to the user in the chat, and explicitly ask if they want to save it.
-    You are FORBIDDEN from calling `confirm_save_paper` until the user replies affirmatively in the next chat turn.
+    MULTI-PAPER STAGING RULE (LIVE USER PROGRESS):
+    - Each `stage_paper` call downloads a PDF, runs page-by-page OCR/Markdown extraction, and calls
+      the summarization LLM (~10–20 seconds per paper).
+    - If you need to stage multiple papers (e.g. 2 to 10+ papers), NEVER emit all `stage_paper` tool
+      calls in a single parallel batch turn! Batching them freezes the chat UI for minutes without
+      intermediate text updates.
+    - Instead, stage them **ONE PAPER PER TURN sequentially**: before each `stage_paper` call, write a
+      short 1-line progress update in chat (e.g. `**[1/10] Staging "Paper Title" (2405.07987)...**`),
+      call `stage_paper` for that single paper, and then proceed to `[2/10]`, `[3/10]`, etc. Once all
+      requested papers are staged, present the consolidated table of staged `temp_id`s and summaries
+      and ask the user for permission to call `confirm_save_paper`.
+
+    CRITICAL INSTRUCTION: You are FORBIDDEN from calling `confirm_save_paper` until all requested papers
+    have been staged, their summaries have been shown to the user, and the user explicitly replies
+    affirmatively in the next chat turn.
     """
+    tracker = StepTracker(total_steps=4, prefix="stage_paper")
     temp_id = str(uuid.uuid4())
     resolved = _resolve_paper_content(
         url_or_arxiv_id=url_or_arxiv_id,
@@ -670,16 +721,26 @@ def stage_paper(
         title=title,
         doi=doi,
         preextracted_text=preextracted_text,
+        tracker=tracker,
     )
 
     doc_name = resolved["title"]
     text_content = resolved["text"]
+    page_count = resolved.get("page_count")
     text_hash = hashlib.sha256(text_content.encode("utf-8")).hexdigest()
     text_dir = settings.CACHE_DIR / "texts"
     text_dir.mkdir(parents=True, exist_ok=True)
     text_path = text_dir / f"{text_hash}.md"
     text_path.write_text(text_content, encoding="utf-8")
     text_path_str = str(text_path)
+
+    sum_model = settings.normalize_litellm_model(
+        getattr(settings, "DEFAULT_SUMMARIZATION_MODEL", "openrouter/deepseek/deepseek-chat"),
+        default="openrouter/deepseek/deepseek-chat",
+    )
+    tracker.step(
+        f"Summarizing '{doc_name}' ({len(text_content):,} chars) via {sum_model}..."
+    )
 
     # Always summarize with the dedicated OpenRouter summarization model (`summarize_text`)
     try:
@@ -699,11 +760,14 @@ def stage_paper(
         "text_hash": text_hash,
         "text_path": text_path_str,
         "staged_pdf_path": resolved.get("pdf_path"),
-        "page_count": resolved.get("page_count"),
+        "page_count": page_count,
         "doi": resolved.get("doi"),
         "resolution_tier": resolved.get("resolution_tier"),
     }
     _save_staged_manifest(temp_id, manifest)
+    tracker.step(
+        f"Staged manifest saved (temp_id={temp_id}) -> [{target_scope.upper()}] {target_virtual_dir}"
+    )
     logger.info(
         "Staged paper '%s' (ID: %s, tier: %s, scope: %s -> %s)",
         doc_name,
@@ -714,13 +778,21 @@ def stage_paper(
     )
 
     pdf_status = "Full PDF downloaded" if resolved.get("pdf_path") else "Metadata/Abstract indexed (no direct PDF)"
+    pages_line = (
+        f"Pages: {page_count} ({len(text_content):,} chars extracted)\n"
+        if page_count is not None
+        else f"Extracted Size: {len(text_content):,} chars\n"
+    )
     return (
         f"Paper staged successfully with ID: {temp_id}\n\n"
         f"Title: {doc_name}\n"
         f"Resolution: {pdf_status} [{resolved.get('resolution_tier')}]\n"
+        f"{pages_line}"
         f"Target: [{target_scope.upper()}] {target_virtual_dir}\n"
         f"Summary: {summary}\n\n"
-        f"STOP EXECUTION NOW and ask the user for permission to use `confirm_save_paper`."
+        f"{tracker.format_block()}\n\n"
+        f"STOP EXECUTION NOW (or stage the next paper sequentially with a `[k/N]` status line) "
+        f"and ask the user for permission before calling `confirm_save_paper`."
     )
 
 
@@ -749,7 +821,7 @@ def _move_staged_pdf_to_flat_folder(staged_pdf_str: Optional[str], doc_name: str
     return str(dest_pdf)
 
 
-def _persist_to_vtree(paper_info: dict) -> Optional[str]:
+def _persist_to_vtree(paper_info: dict, tracker: Optional[StepTracker] = None) -> Optional[str]:
     """
     Write the confirmed paper into the target VTree, move any downloaded PDF into
     `<library_root>/Downloaded/`, and refresh dirty ancestor directory summaries via OpenRouter.
@@ -785,9 +857,13 @@ def _persist_to_vtree(paper_info: dict) -> Optional[str]:
         }
 
     doc_name = paper_info.get("name") or _derive_name(paper_info["url"])
+    if tracker is not None:
+        tracker.step(f"Moving staged PDF for '{doc_name}' into Downloaded/ folder...")
     saved_pdf_path = _move_staged_pdf_to_flat_folder(paper_info.get("staged_pdf_path"), doc_name, vtree_dict)
     real_path = saved_pdf_path or paper_info.get("text_path") or paper_info["url"]
 
+    if tracker is not None:
+        tracker.step(f"Inserting '{doc_name}' into [{scope.upper()}] VTree at '{paper_info['dir']}'...")
     mgr = VTreeManager(vtree_dict)
     doc_node = {
         "type": "document",
@@ -804,6 +880,8 @@ def _persist_to_vtree(paper_info: dict) -> Optional[str]:
     mgr.add_document(paper_info["dir"], doc_node)
 
     # Refresh ancestor directory summaries via OpenRouter (`summarize_directory`)
+    if tracker is not None:
+        tracker.step(f"Updating ancestor directory summaries for '{paper_info['dir']}'...")
     try:
         from src.cold_start.refresher import _refresh_dirty_directory_summaries
 
@@ -828,20 +906,29 @@ def confirm_save_paper(temp_id: str) -> str:
     if not paper_info:
         return f"Error: No staged paper found with ID '{temp_id}'."
 
+    tracker = StepTracker(total_steps=3, prefix="confirm_save_paper")
     target_dir = paper_info["dir"]
     saved_pdf: Optional[str] = None
     try:
-        saved_pdf = _persist_to_vtree(paper_info)
+        saved_pdf = _persist_to_vtree(paper_info, tracker=tracker)
     except Exception as e:
         logger.warning("VTree persistence skipped/failed during confirm_save_paper: %s", e)
 
     logger.info("Confirmed save of staged paper %s to '%s' (pdf=%s)", temp_id, target_dir, saved_pdf)
+    kg_reminder = (
+        "\n\nMemory Reminder: If the user expressed interest in this paper's topic or has read it, "
+        "record it proactively via `ra_kg_remember_user_fact` (or `ra_kg_add_triplet`)."
+    )
     if saved_pdf:
         return (
             f"Successfully saved paper to '{target_dir}' (PDF saved to '{saved_pdf}'). "
-            f"Ancestor directory summaries have been updated."
+            f"Ancestor directory summaries have been updated.\n\n"
+            f"{tracker.format_block()}{kg_reminder}"
         )
-    return f"Successfully saved paper to '{target_dir}'. Ancestor directory summaries have been updated."
+    return (
+        f"Successfully saved paper to '{target_dir}'. Ancestor directory summaries have been updated.\n\n"
+        f"{tracker.format_block()}{kg_reminder}"
+    )
 
 
 @mcp.tool()

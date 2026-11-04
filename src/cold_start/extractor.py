@@ -70,12 +70,16 @@ def get_converter():
     return _converter_instance
 
 def extract_pdf_docling(file_path: Path) -> ExtractedContent:
+    from src.mcp_servers.progress import report_mcp_progress
+
+    report_mcp_progress(0, 1, f"[Docling] Converting '{file_path.name}' to Markdown...")
     converter = get_converter()
     result = converter.convert(file_path)
     doc = result.document
     
     text = doc.export_to_markdown()
     headings = [line.strip('# ').strip() for line in text.split('\n') if line.startswith('#')]
+    report_mcp_progress(1, 1, f"[Docling] Extracted {len(text):,} chars from '{file_path.name}'")
     
     return ExtractedContent(text=text, headings=headings)
 
@@ -150,11 +154,11 @@ def extract_pdf_llm(file_path: Path) -> ExtractedContent:
     bounded by a global semaphore (`MAX_CONCURRENT_REQUESTS`).
     """
     from config.prompts import get_prompts
+    from src.mcp_servers.progress import report_mcp_progress
 
     _, max_workers = _get_ocr_semaphore()
     raw_model = getattr(settings, "VISION_MODEL", settings.DEFAULT_SUMMARIZATION_MODEL)
     model = settings.normalize_litellm_model(raw_model, default="openrouter/google/gemini-2.5-flash")
-    logger.info("[LLM OCR] Extracting '%s' via %s (concurrency=%d)...", file_path.name, model, max_workers)
 
     prompts = get_prompts()
     prompt_template = prompts["extractor"]["llm_ocr_prompt"]
@@ -164,6 +168,11 @@ def extract_pdf_llm(file_path: Path) -> ExtractedContent:
     page_images: list[tuple[int, str]] = []
     with fitz.open(file_path) as doc:
         total_pages = doc.page_count
+        report_mcp_progress(
+            0,
+            max(1, total_pages),
+            f"[LLM OCR] Starting Vision OCR on '{file_path.name}' ({total_pages} pages, concurrency={max_workers}, model={model})...",
+        )
         for page_num in range(total_pages):
             page = doc.load_page(page_num)
             pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x resolution
@@ -182,7 +191,12 @@ def extract_pdf_llm(file_path: Path) -> ExtractedContent:
             idx = future_to_idx[future]
             text_parts[idx] = future.result()
             completed_count += 1
-            logger.info("[LLM OCR] Completed %d/%d pages for '%s'", completed_count, total_pages, file_path.name)
+            pct = int(completed_count * 100 / max(1, total_pages))
+            report_mcp_progress(
+                completed_count,
+                max(1, total_pages),
+                f"[LLM OCR] Completed {completed_count}/{total_pages} pages ({pct}%) for '{file_path.name}'",
+            )
 
     full_text = "\n\n".join(text_parts)
     headings = [line.strip("# ").strip() for line in full_text.split("\n") if line.startswith("#")]

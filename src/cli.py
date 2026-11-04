@@ -345,6 +345,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # 1. install-opencode
     p_install = sub.add_parser(
         "install-opencode",
+        aliases=["install"],
         help="Register MCP servers, permissions, and agents in ~/.config/opencode/",
     )
     p_install.add_argument(

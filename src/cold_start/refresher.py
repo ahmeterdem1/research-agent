@@ -26,6 +26,7 @@ from src.cold_start.extractor import extract_content
 from src.cold_start.scanner import FileInfo, scan_directory
 from src.cold_start.splitter import split_book
 from src.cold_start.summarizer import summarize_book, summarize_directory, summarize_text
+from src.mcp_servers.progress import report_mcp_progress
 from src.vtree.operations import VTreeManager
 from src.vtree.store import VTreeStore
 
@@ -428,11 +429,16 @@ def _repair_nodes_list(inconsistent_nodes: list[dict], vtree_dict: dict, mgr: VT
     )
 
     repaired: list[dict] = []
-    for node in inconsistent_nodes:
+    total_repair = len(inconsistent_nodes)
+    for idx, node in enumerate(inconsistent_nodes, start=1):
         real_path = node.get("real_path") or ""
         title = node.get("name")
         doi = node.get("doi")
-        logger.info("Repairing inconsistent VTree document node '%s' (source=%s)", title, real_path)
+        report_mcp_progress(
+            idx - 1,
+            total_repair,
+            f"[Repair {idx}/{total_repair}] Healing inconsistent node '{title}' (source: {real_path})...",
+        )
         try:
             local_candidate = Path(real_path).expanduser() if real_path else None
             if local_candidate and local_candidate.exists() and local_candidate.is_file():
@@ -472,6 +478,11 @@ def _repair_nodes_list(inconsistent_nodes: list[dict], vtree_dict: dict, mgr: VT
                 if node.get("virtual_path"):
                     mgr.update_ancestor_summaries(node["virtual_path"], node["summary"])
                 repaired.append(node)
+                report_mcp_progress(
+                    idx,
+                    total_repair,
+                    f"[Repair {idx}/{total_repair}] Repaired '{title}' ({page_count or '?'} pages)",
+                )
         except Exception as e:
             logger.warning("Failed to repair inconsistent node '%s': %s", title, e)
     return repaired
@@ -598,7 +609,14 @@ def refresh_vtree(
 
     # Step 3: Parse & summarize newly dropped files on disk
     if unindexed:
+        total_new = len(unindexed)
+        report_mcp_progress(
+            0,
+            total_new,
+            f"[Refresh] Parsing & summarizing {total_new} new file(s) ({new_pages} page(s))...",
+        )
         max_workers = max(1, int(getattr(settings, "MAX_CONCURRENT_REQUESTS", 5)))
+        completed_new = 0
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_finfo = {
                 executor.submit(_process_new_file, finfo, book_threshold): finfo
@@ -606,18 +624,34 @@ def refresh_vtree(
             }
             for future in concurrent.futures.as_completed(future_to_finfo):
                 finfo = future_to_finfo[future]
+                completed_new += 1
                 try:
                     node_dict = future.result()
                     if node_dict is None:
                         result.failed_files.append(finfo.real_path)
+                        report_mcp_progress(
+                            completed_new,
+                            total_new,
+                            f"[Index {completed_new}/{total_new}] Skipped/failed '{finfo.name}'",
+                        )
                         continue
 
                     vdir = _infer_virtual_dir(finfo.real_path, resolved_lib, target_virtual_dir)
                     inserted = mgr.add_document(vdir, node_dict)
                     result.added_nodes.append(inserted)
+                    report_mcp_progress(
+                        completed_new,
+                        total_new,
+                        f"[Index {completed_new}/{total_new}] Indexed '{finfo.name}' -> {inserted.get('virtual_path', vdir)}",
+                    )
                 except Exception as e:
                     logger.error("Failed processing new file '%s' during refresh: %s", finfo.real_path, e)
                     result.failed_files.append(finfo.real_path)
+                    report_mcp_progress(
+                        completed_new,
+                        total_new,
+                        f"[Index {completed_new}/{total_new}] Error on '{finfo.name}': {e}",
+                    )
 
     # Step 4: Refresh dirty directory summaries & persist VTree if anything changed
     dirty_dirs_after = update_dir_summaries and (_count_dirty_directories(vtree_dict.get("root", {})) > 0)

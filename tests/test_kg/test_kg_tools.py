@@ -176,7 +176,61 @@ def test_tools_registered_on_server():
         pytest.skip("FastMCP version does not expose list_tools()")
     names = {t.name for t in tools}
     assert {
-        "add_triplet", "query_kg", "update_triplet", "retract_triplet", "get_user_profile_summary",
-        "search_entities", "get_related_facts", "get_ontology", "extend_ontology",
+        "remember_user_fact", "add_triplet", "query_kg", "update_triplet", "retract_triplet",
+        "get_user_profile_summary", "search_entities", "get_related_facts", "get_ontology", "extend_ontology",
     } <= names
+
+
+def test_remember_user_fact_and_auto_inferred_add_triplet(isolated_store):
+    """
+    Verify:
+    1. `remember_user_fact` maps friendly categories (`background`, `interest`, `preference`,
+       `argument`, `mistake`, `read_paper`) to their ontology relations and classes without
+       requiring `subject`, `subject_class`, or `object_class`.
+    2. `argument` defaults to `scope="project"`, while enduring categories default to `scope="global"`.
+    3. `add_triplet` automatically infers `subject_class` and `object_class` from `relation`
+       when omitted (both for User relations and Paper->Concept relations).
+    """
+    isolated_store.default_project_id = "interp-proj"
+
+    r_bg = kg_tools.remember_user_fact(
+        category="background",
+        fact="Graduate researcher focusing on LLM alignment",
+        context="Mentioned at start of chat",
+    )
+    assert "[GLOBAL]" in r_bg
+    assert "User (User) --has_fact--> Graduate researcher focusing on LLM alignment (PersonalFact)" in r_bg
+
+    r_arg = kg_tools.remember_user_fact(
+        category="argument",
+        fact="Coarse grading rubrics cause reward hacking",
+    )
+    assert "[PROJECT: interp-proj]" in r_arg
+    assert "User (User) --argued_that--> Coarse grading rubrics cause reward hacking (Argument)" in r_arg
+
+    r_paper = kg_tools.remember_user_fact(
+        category="read_paper",
+        fact="The Platonic Representation Hypothesis",
+        properties={"arxiv_id": "2405.07987"},
+    )
+    assert "[GLOBAL]" in r_paper
+    assert "User (User) --has_read--> The Platonic Representation Hypothesis (Paper)" in r_paper
+
+    # Auto-inferred classes on add_triplet when object_class and subject_class are omitted
+    r_auto_user = kg_tools.add_triplet(
+        relation="interested_in",
+        object="Mechanistic Interpretability",
+    )
+    assert "User (User) --interested_in--> Mechanistic Interpretability (Topic)" in r_auto_user
+
+    r_auto_lit = kg_tools.add_triplet(
+        subject="The Platonic Representation Hypothesis",
+        relation="covers",
+        object="Representation Convergence",
+    )
+    assert (
+        "The Platonic Representation Hypothesis (Paper) --covers--> Representation Convergence (Concept)"
+        in r_auto_lit
+    )
+
 

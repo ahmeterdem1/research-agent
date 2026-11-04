@@ -21,6 +21,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from config import settings
 from config.settings import get_logger
+from src.mcp_servers.progress import report_mcp_progress
 from src.subagents.citation_walker import (
     get_citations,
     get_references,
@@ -336,18 +337,29 @@ def read_online_document(url_or_arxiv_id: str) -> str:
             if cached_md_path.exists():
                 cached_text = cached_md_path.read_text(encoding="utf-8")
                 if cached_text.strip():
-                    logger.info("Serving arXiv %s from online_docs cache (%s)", arxiv_id, cached_md_path)
+                    report_mcp_progress(
+                        1,
+                        1,
+                        f"[read_online_document] Serving arXiv:{arxiv_id} from online_docs cache (0 pages re-parsed)",
+                    )
                     return cached_text
 
             pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+            report_mcp_progress(0, 2, f"[read_online_document] Downloading arXiv PDF {pdf_url}...")
             headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ResearchAgent/1.0"}
             resp = requests.get(pdf_url, headers=headers, timeout=20)
             resp.raise_for_status()
             cached_pdf_path.write_bytes(resp.content)
 
+            report_mcp_progress(1, 2, f"[read_online_document] Extracting Markdown from arXiv:{arxiv_id}...")
             content = extract_content(cached_pdf_path)
             if content and content.text.strip():
                 cached_md_path.write_text(content.text, encoding="utf-8")
+                report_mcp_progress(
+                    2,
+                    2,
+                    f"[read_online_document] Completed extraction for arXiv:{arxiv_id} ({len(content.text):,} chars)",
+                )
                 return content.text
             return "Failed to extract text from arXiv PDF."
 

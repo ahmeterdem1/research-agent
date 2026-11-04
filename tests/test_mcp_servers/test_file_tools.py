@@ -143,7 +143,7 @@ def test_stage_paper_tier1_arxiv_pdf_downloads_to_flat_folder(monkeypatch, tmp_p
     monkeypatch.setattr(
         file_tools,
         "_extract_pdf_file",
-        lambda p: ("# From Verifiable Dot to Reward Chain\nFull extracted paper text.", 12),
+        lambda p, **kw: ("# From Verifiable Dot to Reward Chain\nFull extracted paper text.", 12),
     )
     monkeypatch.setattr(
         file_tools,
@@ -615,7 +615,7 @@ def test_arxiv_lucene_escaping_and_tier1_hallucinated_id_rejection(monkeypatch, 
     monkeypatch.setattr(
         file_tools,
         "_extract_pdf_file",
-        lambda p: ("# The Platonic Representation Hypothesis\nFull text.", 26),
+        lambda p, **kw: ("# The Platonic Representation Hypothesis\nFull text.", 26),
     )
 
     resolved = file_tools._resolve_paper_content(
@@ -629,6 +629,47 @@ def test_arxiv_lucene_escaping_and_tier1_hallucinated_id_rejection(monkeypatch, 
     assert resolved["resolution_tier"] == "tier2_arxiv_search_pdf"
     assert resolved["doi"] == "10.48550/arXiv.2405.07987"
     assert resolved["page_count"] == 26
+
+
+def test_stage_paper_verbose_progress_and_timing(monkeypatch, tmp_path):
+    """
+    Verify that `stage_paper` and `confirm_save_paper` emit step-by-step progress
+    notifications via `StepTracker` / `report_mcp_progress` and include an
+    `Execution Progress & Timing:` summary block + page count in their returned output.
+    """
+    import re
+    from config import settings
+    from src.mcp_servers import progress as progress_mod
+
+    _STAGED_PAPERS.clear()
+    monkeypatch.setattr(settings, "STAGED_DIR", tmp_path / "staged")
+    monkeypatch.setattr(settings, "CACHE_DIR", tmp_path / "cache")
+
+    progress_events = []
+    orig_report = progress_mod.report_mcp_progress
+
+    def capture_progress(progress, total=None, message=None):
+        progress_events.append((progress, total, message))
+        orig_report(progress, total, message)
+
+    monkeypatch.setattr(progress_mod, "report_mcp_progress", capture_progress)
+    monkeypatch.setattr(file_tools, "summarize_text", lambda txt: "Mock summary for Platonic Representation Hypothesis.")
+
+    out = file_tools.stage_paper(
+        "https://arxiv.org/abs/2405.07987",
+        "/RepresentationLearning",
+        title="Position: The Platonic Representation Hypothesis",
+        preextracted_text="# The Platonic Representation Hypothesis\nModels converge in representation space.",
+    )
+
+    assert "Execution Progress & Timing:" in out
+    assert "[1/4" in out
+    assert "[4/4" in out
+    assert "Extracted Size:" in out
+    assert len(progress_events) >= 4
+    assert any("Resolving paper source & metadata" in msg for _, _, msg in progress_events)
+    assert any("Summarizing 'Position The Platonic Representation Hypothesis'" in msg for _, _, msg in progress_events)
+
 
 
 
