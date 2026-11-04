@@ -1,6 +1,6 @@
 # Research Agent — System-Wide OpenCode Extension
 
-A local-first academic and technical research extension for **OpenCode** (`opencode` TUI, `opencode web`, and OpenCode Desktop). Installed once system-wide on your PC, it equips OpenCode with:
+A local-first academic and technical research extension for [**OpenCode**](https://github.com/anomalyco/opencode) (`opencode` TUI, `opencode web`, and OpenCode Desktop). Installed once system-wide on your PC, it equips OpenCode with:
 
 1. **Dual-Scope Virtual Document Tree (`ra_docs`)**: A decoupled semantic hierarchy (`vtree.json`) over your PDF/Markdown/DOCX textbooks and papers—supporting both a **PC-wide Global Library** (`~/.research-agent/vtrees/global.json`) and optional **Project-Local Libraries** (`<project>/.opencode/vtree.json`).
 2. **Academic & Web Literature Search (`ra_search`)**: Free DuckDuckGo web search, Semantic Scholar paper search & metadata, arXiv PDF extraction, and forward/backward citation graph edges.
