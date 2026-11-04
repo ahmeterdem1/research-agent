@@ -287,8 +287,9 @@ class KGStore:
         return self._row_to_entity(row) if row else None
 
     def search_entities(self, query: str, entity_class: Optional[str] = None, limit: int = 20) -> list[Entity]:
-        """Case-insensitive substring search over entity names."""
-        sql, params = "SELECT * FROM entities WHERE name LIKE ?", [f"%{query.strip()}%"]
+        """Case-insensitive substring and multi-token search over entity names."""
+        q_clean = query.strip()
+        sql, params = "SELECT * FROM entities WHERE name LIKE ?", [f"%{q_clean}%"]
         if entity_class:
             sql += " AND class = ?"
             params.append(entity_class)
@@ -296,6 +297,26 @@ class KGStore:
         params.append(limit)
         with connect(self.db_path) as conn:
             rows = conn.execute(sql, params).fetchall()
+            if not rows and " " in q_clean:
+                tokens = [
+                    t.lower()
+                    for t in q_clean.split()
+                    if len(t) >= 3 and t.lower() not in {"the", "and", "for", "with", "from"}
+                ]
+                if tokens:
+                    or_clause = " OR ".join("name LIKE ?" for _ in tokens)
+                    tok_params: list[Any] = [f"%{t}%" for t in tokens]
+                    tok_sql = f"SELECT * FROM entities WHERE ({or_clause})"
+                    if entity_class:
+                        tok_sql += " AND class = ?"
+                        tok_params.append(entity_class)
+                    cand_rows = conn.execute(tok_sql, tok_params).fetchall()
+                    scored = sorted(
+                        cand_rows,
+                        key=lambda r: sum(1 for t in tokens if t in r["name"].lower()),
+                        reverse=True,
+                    )
+                    rows = scored[:limit]
         return [self._row_to_entity(r) for r in rows]
 
     # ------------------------------------------------------------------ #

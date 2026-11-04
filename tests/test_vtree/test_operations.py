@@ -120,3 +120,76 @@ def test_rm_removes_node_and_marks_ancestors(sample_vtree):
     assert "Error: Cannot remove root" in manager.rm("/")
 
 
+def test_search_library_lucene_tokenized_and_stem_matching():
+    """
+    Verify that `search_library` performs Lucene/BM25-style ranked tokenized search
+    rather than requiring a single contiguous substring match:
+    1. 'platonic representation hypothesis convergence' matches 'Position The Platonic Representation Hypothesis'
+       even though 'convergence' is not in the title and the summary says 'converging'.
+    2. 'attention is all you need transformer' matches 'attention.pdf'.
+    3. Lucene operators (`"quoted phrase"`, `-excluded`, `+required`, `OR`) work as expected.
+    """
+    vtree = {
+        "root": {
+            "type": "directory",
+            "name": "root",
+            "virtual_path": "/",
+            "children": [
+                {
+                    "type": "directory",
+                    "name": "RepresentationLearning",
+                    "virtual_path": "/RepresentationLearning",
+                    "summary": "Papers on representation alignment across modalities.",
+                    "children": [
+                        {
+                            "type": "document",
+                            "name": "Position The Platonic Representation Hypothesis",
+                            "virtual_path": "/RepresentationLearning/Position The Platonic Representation Hypothesis",
+                            "summary": (
+                                "Argues that neural networks trained on different modalities and objectives "
+                                "are converging toward a shared statistical model of reality."
+                            ),
+                            "doi": "10.48550/arXiv.2405.07987",
+                        },
+                        {
+                            "type": "document",
+                            "name": "A Survey of Multimodal Representations",
+                            "virtual_path": "/RepresentationLearning/A Survey of Multimodal Representations",
+                            "summary": "Comprehensive survey of vision-language representation spaces.",
+                        },
+                    ],
+                },
+                {
+                    "type": "document",
+                    "name": "attention.pdf",
+                    "virtual_path": "/attention.pdf",
+                    "summary": "Attention is all you need. Introduces the Transformer architecture.",
+                },
+            ],
+        }
+    }
+    manager = VTreeManager(vtree)
+
+    # 1. User's exact GLM-5.3 Flash query: "platonic representation hypothesis convergence"
+    hits = manager.search_library("platonic representation hypothesis convergence")
+    assert len(hits) >= 1
+    assert hits[0]["name"] == "Position The Platonic Representation Hypothesis"
+
+    # 2. Multi-keyword query from docstring: "attention is all you need transformer"
+    hits_att = manager.search_library("attention is all you need transformer")
+    assert len(hits_att) >= 1
+    assert hits_att[0]["name"] == "attention.pdf"
+
+    # 3. Lucene exclusion `-survey` filters out the survey paper
+    hits_no_survey = manager.search_library("representation -survey")
+    names_no_survey = [h["name"] for h in hits_no_survey]
+    assert "Position The Platonic Representation Hypothesis" in names_no_survey
+    assert "A Survey of Multimodal Representations" not in names_no_survey
+
+    # 4. Lucene quoted phrase `"shared statistical model"`
+    hits_phrase = manager.search_library('"shared statistical model"')
+    assert len(hits_phrase) == 1
+    assert hits_phrase[0]["name"] == "Position The Platonic Representation Hypothesis"
+
+
+

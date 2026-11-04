@@ -275,16 +275,22 @@ def search_library(
 ) -> str:
     """
     Instantly searches the local virtual library (both Global and Project-Local by default
-    when `scope="all"`) for documents, books, or directories matching the keyword query.
-    The search is case-insensitive and matches against the file name, DOI, and the
-    LLM-generated summaries of every item.
+    when `scope="all"`) using a Lucene / BM25-style ranked tokenized search across file names,
+    virtual paths, DOIs, and LLM-generated summaries.
 
-    Use this tool FIRST before deciding to fetch a paper from the web. By searching
-    for keywords related to the paper (e.g., 'attention is all you need transformer'),
-    you can discover if the paper was already ingested under a different file name,
-    thus preventing duplicate downloads.
+    Query capabilities:
+    - Multi-keyword bags of words (e.g. `'platonic representation hypothesis convergence'` or
+      `'attention is all you need transformer'`) — words do NOT need to appear as an exact
+      contiguous phrase; nodes matching the most keywords/stems in their title or summary
+      are ranked highest.
+    - Lucene operators: quoted exact phrases (`"platonic representation"`), required terms
+      (`+platonic`), excluded terms (`-survey` or `NOT survey`), boolean `OR`, and stem/prefix
+      matching (`convergence` matches `converging` / `converge`).
 
-    Returns a formatted list of matches containing their scope, virtual path, type, and summary.
+    Use this tool FIRST before deciding to fetch a paper from the web so you can discover
+    if the paper was already ingested under a different file name and avoid duplicate downloads.
+
+    Returns a ranked list of matches containing their scope, virtual path, type, and summary.
     """
     try:
         managers = _iter_managers(scope)
