@@ -3,7 +3,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Optional
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
@@ -31,14 +31,71 @@ def _resolve_data_dir() -> Path:
 
 DATA_DIR = _resolve_data_dir()
 
-# Load .env files in precedence order (highest precedence first, since override=False
-# keeps whichever value was loaded first, and real process env vars always win):
-# 1. Active workspace / project .env
-# 2. Global ~/.research-agent/.env
-# 3. Repository root .env
-load_dotenv(Path.cwd() / ".env", override=False)
-load_dotenv(DATA_DIR / ".env", override=False)
-load_dotenv(PROJECT_ROOT / ".env", override=False)
+_INITIAL_PROCESS_ENV_KEYS: set[str] = set(os.environ.keys())
+_LAST_ENV_MTIMES: dict[str, Optional[int]] = {}
+
+
+def _get_env_files_mtimes() -> dict[str, Optional[int]]:
+    paths = {
+        "repo": PROJECT_ROOT / ".env",
+        "global": DATA_DIR / ".env",
+        "cwd": Path.cwd() / ".env",
+    }
+    mtimes: dict[str, Optional[int]] = {}
+    for key, p in paths.items():
+        try:
+            mtimes[key] = p.stat().st_mtime_ns if p.exists() else None
+        except OSError:
+            mtimes[key] = None
+    return mtimes
+
+
+def _load_layered_dotenv(force_override: bool = False) -> None:
+    """
+    Load .env files with strict, deterministic precedence (lowest to highest):
+    1. Repository fallback `<repo_root>/.env`
+    2. Global user config `~/.research-agent/.env` (ALWAYS overrides `<repo_root>/.env`,
+       even when `Path.cwd()` happens to be `<repo_root>`)
+    3. Workspace-local `<cwd>/.env` (only when `<cwd>` is a separate project directory
+       distinct from `<repo_root>` and `~/.research-agent`)
+    4. Explicit process environment variables present before startup (unless `force_override=True`
+       when a `.env` file was modified live on disk).
+    """
+    global _LAST_ENV_MTIMES
+    repo_env = PROJECT_ROOT / ".env"
+    global_env = DATA_DIR / ".env"
+    cwd_env = Path.cwd() / ".env"
+
+    merged: dict[str, str] = {}
+    if repo_env.exists():
+        for k, v in dotenv_values(repo_env).items():
+            if v is not None:
+                merged[k] = v
+
+    if global_env.exists():
+        for k, v in dotenv_values(global_env).items():
+            if v is not None:
+                merged[k] = v
+
+    try:
+        cwd_resolved = cwd_env.resolve()
+        is_distinct_cwd = cwd_resolved not in {repo_env.resolve(), global_env.resolve()}
+    except OSError:
+        is_distinct_cwd = False
+
+    if is_distinct_cwd and cwd_env.exists():
+        for k, v in dotenv_values(cwd_env).items():
+            if v is not None:
+                merged[k] = v
+
+    for k, v in merged.items():
+        if force_override or k not in _INITIAL_PROCESS_ENV_KEYS:
+            os.environ[k] = v
+
+    _LAST_ENV_MTIMES = _get_env_files_mtimes()
+
+
+_load_layered_dotenv(force_override=False)
 
 # Subdirectories inside DATA_DIR
 CACHE_DIR = DATA_DIR / "cache"
@@ -119,6 +176,40 @@ LLM_REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", 90))
 
 # Application Thresholds
 BOOK_PAGE_THRESHOLD = 30
+
+
+def reload_env_settings() -> None:
+    """
+    Check if `~/.research-agent/.env`, `<cwd>/.env`, or `<repo>/.env` has been modified
+    since startup and, if so, reload environment variables and refresh module-level
+    configuration attributes live (without requiring an MCP server / OpenCode restart).
+    """
+    global LIBRARY_ROOT_PATH, OPENROUTER_API_KEY, DEFAULT_AGENT_MODEL
+    global DEFAULT_SUMMARIZATION_MODEL, EXTRACTOR_MODE, VISION_MODEL
+    global MAX_CONCURRENT_REQUESTS, LLM_REQUEST_TIMEOUT
+
+    current_mtimes = _get_env_files_mtimes()
+    if current_mtimes == _LAST_ENV_MTIMES:
+        return
+
+    _load_layered_dotenv(force_override=True)
+    LIBRARY_ROOT_PATH = os.getenv("PATH_TO_TREE", "")
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+    DEFAULT_AGENT_MODEL = normalize_litellm_model(
+        os.getenv("DEFAULT_AGENT_MODEL", "openrouter/deepseek/deepseek-chat"),
+        default="openrouter/deepseek/deepseek-chat",
+    )
+    DEFAULT_SUMMARIZATION_MODEL = normalize_litellm_model(
+        os.getenv("DEFAULT_SUMMARIZATION_MODEL", "openrouter/deepseek/deepseek-chat"),
+        default="openrouter/deepseek/deepseek-chat",
+    )
+    EXTRACTOR_MODE = os.getenv("EXTRACTOR_MODE", "pymupdf")
+    VISION_MODEL = normalize_litellm_model(
+        os.getenv("VISION_MODEL", "openrouter/google/gemini-2.5-flash"),
+        default="openrouter/google/gemini-2.5-flash",
+    )
+    MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", 5))
+    LLM_REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", 90))
 
 
 class _StderrStreamHandler(logging.StreamHandler):

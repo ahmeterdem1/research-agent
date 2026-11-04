@@ -72,12 +72,23 @@ def get_install_receipt_path() -> Path:
 
 def load_install_receipt() -> dict:
     path = get_install_receipt_path()
-    if not path.exists():
-        return {}
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    # Fallback: inspect PEP 610 direct_url.json written by `uv tool install git+...`
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        dist = importlib.metadata.distribution("research-agent")
+        raw_direct = dist.read_text("direct_url.json")
+        if raw_direct:
+            direct_data = json.loads(raw_direct)
+            commit_id = (direct_data.get("vcs_info") or {}).get("commit_id")
+            if commit_id:
+                return {"sha": commit_id, "source": "direct_url"}
     except Exception:
-        return {}
+        pass
+    return {}
 
 
 def save_install_receipt(receipt: dict) -> None:
@@ -248,7 +259,7 @@ def is_upgrade_needed(
     if remote_sha and local_sha and remote_sha != local_sha:
         return True, f"New commit available on GitHub ({remote_sha[:8]} vs installed {local_sha[:8]})."
 
-    if remote_version is None and remote_sha and local_sha is None:
+    if remote_sha and local_sha is None:
         return True, f"No prior install receipt found; installing remote commit {remote_sha[:8]}."
 
     if remote_version is None and remote_sha is None:
@@ -259,7 +270,7 @@ def is_upgrade_needed(
 
 def _run_uv_global_install(repo: str, ref: str) -> tuple[bool, str]:
     """
-    Install the package globally via `uv tool install --force` directly from GitHub.
+    Install the package globally via `uv tool install --force --reinstall` directly from GitHub.
     Never modifies any local development directory.
     """
     ref_suffix = f"@{ref}" if ref and ref != "HEAD" else ""
@@ -269,7 +280,7 @@ def _run_uv_global_install(repo: str, ref: str) -> tuple[bool, str]:
     ]
     last_err = ""
     for git_target in candidates:
-        cmd = ["uv", "tool", "install", "--force", git_target]
+        cmd = ["uv", "tool", "install", "--force", "--reinstall", git_target]
         logger.info("Running system-wide upgrade: %s", " ".join(cmd))
         res = subprocess.run(cmd, capture_output=True, text=True)
         if res.returncode == 0:

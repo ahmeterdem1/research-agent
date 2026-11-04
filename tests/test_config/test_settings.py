@@ -60,3 +60,28 @@ def test_normalize_litellm_model_adds_openrouter_prefix():
     assert settings.normalize_litellm_model("ollama/llama3") == "ollama/llama3"
 
 
+def test_global_env_overrides_repo_env_and_live_reloads(monkeypatch, tmp_path):
+    fake_repo = tmp_path / "repo"
+    fake_global = tmp_path / "global_home"
+    fake_repo.mkdir()
+    fake_global.mkdir()
+
+    # Repo .env has legacy EXTRACTOR_MODE=llm, while ~/.research-agent/.env has EXTRACTOR_MODE=pymupdf
+    (fake_repo / ".env").write_text("EXTRACTOR_MODE=llm\n", encoding="utf-8")
+    (fake_global / ".env").write_text(
+        "EXTRACTOR_MODE=pymupdf\nPATH_TO_TREE=/Users/test/literature-dev\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(settings, "PROJECT_ROOT", fake_repo)
+    monkeypatch.setattr(settings, "DATA_DIR", fake_global)
+    # Even when cwd == repo root, global ~/.research-agent/.env must win over repo .env
+    monkeypatch.chdir(fake_repo)
+    monkeypatch.setattr(settings, "_LAST_ENV_MTIMES", {})
+
+    settings.reload_env_settings()
+    assert settings.EXTRACTOR_MODE == "pymupdf"
+    assert settings.LIBRARY_ROOT_PATH == "/Users/test/literature-dev"
+
+
+

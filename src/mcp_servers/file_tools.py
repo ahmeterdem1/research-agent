@@ -153,6 +153,8 @@ def _extract_pdf_file(
     label: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[int]]:
     """Extract Markdown text and page count from a local PDF file."""
+    if hasattr(settings, "reload_env_settings"):
+        settings.reload_env_settings()
     page_count: Optional[int] = None
     fallback_text_parts: list[str] = []
     try:
@@ -783,10 +785,11 @@ def stage_paper(
     )
 
     pdf_status = "Full PDF downloaded" if resolved.get("pdf_path") else "Metadata/Abstract indexed (no direct PDF)"
+    active_extractor = getattr(settings, "EXTRACTOR_MODE", "pymupdf").lower().strip()
     pages_line = (
-        f"Pages: {page_count} ({len(text_content):,} chars extracted)\n"
+        f"Pages: {page_count} ({len(text_content):,} chars extracted, extractor={active_extractor})\n"
         if page_count is not None
-        else f"Extracted Size: {len(text_content):,} chars\n"
+        else f"Extracted Size: {len(text_content):,} chars (extractor={active_extractor})\n"
     )
     return (
         f"Paper staged successfully with ID: {temp_id}\n\n"

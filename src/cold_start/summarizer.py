@@ -35,6 +35,8 @@ def _log_summarizer_retry(retry_state) -> None:
 
 
 def _resolve_sum_model() -> tuple[str, int]:
+    if hasattr(settings, "reload_env_settings"):
+        settings.reload_env_settings()
     raw_model = getattr(settings, "DEFAULT_SUMMARIZATION_MODEL", "openrouter/deepseek/deepseek-chat")
     model = settings.normalize_litellm_model(raw_model, default="openrouter/deepseek/deepseek-chat")
     timeout = int(getattr(settings, "LLM_REQUEST_TIMEOUT", 90))

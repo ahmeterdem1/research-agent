@@ -22,6 +22,8 @@ class ExtractedContent:
     headings: list[str]
 
 def extract_content(file_path: str | Path) -> ExtractedContent | None:
+    if hasattr(settings, "reload_env_settings"):
+        settings.reload_env_settings()
     file_path = Path(file_path)
     ext = file_path.suffix.lower()
 

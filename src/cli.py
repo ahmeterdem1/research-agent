@@ -127,37 +127,13 @@ def migrate_repo_data_to_global(data_dir: Optional[Path] = None) -> list[str]:
         if copied_texts:
             migrated.append(f"{copied_texts} cached text file(s) -> {dst_texts}")
 
-    # 4. .env -> ~/.research-agent/.env
+    # 4. .env -> ~/.research-agent/.env (only seed if ~/.research-agent/.env does not exist yet;
+    # never overwrite the user's global ~/.research-agent/.env configuration)
     src_env = settings.PROJECT_ROOT / ".env"
     dst_env = target_home / ".env"
-    if src_env.exists():
-        if not dst_env.exists():
-            shutil.copy2(src_env, dst_env)
-            migrated.append(f".env -> {dst_env}")
-        else:
-            # Keep EXTRACTOR_MODE in ~/.research-agent/.env synchronized when updated in repo .env
-            try:
-                src_lines = src_env.read_text(encoding="utf-8").splitlines()
-                src_mode_line = next((l for l in src_lines if l.strip().startswith("EXTRACTOR_MODE=")), None)
-                if src_mode_line:
-                    dst_text = dst_env.read_text(encoding="utf-8")
-                    dst_lines = dst_text.splitlines()
-                    updated_lines = []
-                    replaced = False
-                    for line in dst_lines:
-                        if line.strip().startswith("EXTRACTOR_MODE="):
-                            if line.strip() != src_mode_line.strip():
-                                updated_lines.append(src_mode_line.strip())
-                                replaced = True
-                            else:
-                                updated_lines.append(line)
-                        else:
-                            updated_lines.append(line)
-                    if replaced:
-                        dst_env.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
-                        migrated.append(f"Synced {src_mode_line.strip()} -> {dst_env}")
-            except OSError:
-                pass
+    if src_env.exists() and not dst_env.exists():
+        shutil.copy2(src_env, dst_env)
+        migrated.append(f".env -> {dst_env}")
 
     for item in migrated:
         logger.info("Migrated %s", item)
