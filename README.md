@@ -1,6 +1,26 @@
 # Research Agent — System-Wide OpenCode Extension
 
-A local-first academic and technical research extension for [**OpenCode**](https://github.com/anomalyco/opencode) (`opencode` TUI, `opencode web`, and OpenCode Desktop). Installed once system-wide on your PC, it equips OpenCode with:
+A local-first academic and technical research extension for [**OpenCode**](https://github.com/anomalyco/opencode) (`opencode` TUI, `opencode web`, and OpenCode Desktop). 
+
+## Research Agent Proposes You:
+
+- Personalized context that is both project specific and global through a knowledge graph
+  - Agent manages a knowledge graph on the user
+  - Saves users interests
+  - Saves users arguments
+  - Saves users mistakes
+  - Agent can address your arguments across chats
+- A paper management pipeline completely offloaded to the agent
+  - Agent finds the papers
+  - Agent installs the pdfs 
+  - No captchas can stop the agent
+- A *virtual* filesystem
+  - Actual papers are saved in a flat directory
+  - Agent puts the papers on directories in a *virtual filesystem*
+  - Agent can call unix-like tools on this virtual filesystem
+  - Agent can organize the papers however it likes, without touching your actual pdfs
+
+Installed once system-wide on your PC, it equips OpenCode with:
 
 1. **Dual-Scope Virtual Document Tree (`ra_docs`)**: A decoupled semantic hierarchy (`vtree.json`) over your PDF/Markdown/DOCX textbooks and papers—supporting both a **PC-wide Global Library** (`~/.research-agent/vtrees/global.json`) and optional **Project-Local Libraries** (`<project>/.opencode/vtree.json`).
 2. **Academic & Web Literature Search (`ra_search`)**: Free DuckDuckGo web search, Semantic Scholar paper search & metadata, arXiv PDF extraction, and forward/backward citation graph edges.
