@@ -1,5 +1,7 @@
 from pathlib import Path
+from collections import Counter
 from dataclasses import dataclass
+import re
 import chardet
 from docx import Document as DocxDocument
 from litellm import completion
@@ -24,16 +26,238 @@ def extract_content(file_path: str | Path) -> ExtractedContent | None:
     ext = file_path.suffix.lower()
 
     if ext == ".pdf":
-        mode = getattr(settings, "EXTRACTOR_MODE", "docling").lower()
+        mode = getattr(settings, "EXTRACTOR_MODE", "pymupdf").lower().strip()
         if mode == "llm":
             return extract_pdf_llm(file_path)
-        else:
+        elif mode == "docling":
             return extract_pdf_docling(file_path)
+        else:
+            # Default: 'pymupdf' (also 'fast' / 'auto') — fast native structured PDF-to-Markdown
+            return extract_pdf_pymupdf(file_path)
     elif ext in {".txt", ".md"}:
         return extract_text(file_path)
     elif ext == ".docx":
         return extract_docx(file_path)
     return None
+
+
+_SECTION_HEADER_RE = re.compile(
+    r"^(?:"
+    r"abstract|introduction|background|related\s+work|preliminaries|method|methods|methodology|"
+    r"approach|model|architecture|experiments|experimental\s+setup|results|discussion|analysis|"
+    r"ablation\s+study|limitations|broader\s+impact|conclusion|conclusions|acknowledgements|"
+    r"acknowledgments|references|bibliography|appendix|supplementary\s+material|"
+    r"(?:[1-9]\d*(?:\.[1-9]\d*)*|[IVX]+)\.?\s+[A-Z][A-Za-z0-9\s,\-:()/]{2,85}"
+    r")$",
+    re.IGNORECASE,
+)
+_SUBSECTION_NUMBER_RE = re.compile(r"^[1-9]\d*\.[1-9]\d*(?:\.\d+)*\.?\s+[A-Z]")
+_LIST_ITEM_RE = re.compile(r"^(?:[•◦▪\-*]|\(\d+\)|\d+\.|\[[0-9]+\])\s+")
+_RUNNING_BANNER_RE = re.compile(
+    r"^(?:published\s+as\s+a\s+conference\s+paper|preprint\.\s+under\s+review|"
+    r"proceedings\s+of\s+the\s+\d+|arxiv:\d{4}\.\d{4,5})",
+    re.IGNORECASE,
+)
+
+
+def _is_span_bold(span: dict) -> bool:
+    flags = int(span.get("flags", 0))
+    if flags & 16:  # PyMuPDF bit 4 = bold
+        return True
+    font_name = (span.get("font") or "").lower()
+    return any(b in font_name for b in ("bold", "medi", "demi", "cmbx", " NimbusRomNo9L-Medi".lower()))
+
+
+def extract_pdf_pymupdf(file_path: Path, allow_ocr_fallback: bool = True) -> ExtractedContent:
+    """
+    Fast, zero-cost native structured PDF-to-Markdown converter powered by PyMuPDF (`fitz`).
+
+    Features:
+    - Layout-aware 2-column reading order (`page.get_text("dict", sort=True)`).
+    - Font-size + bold + academic section-numbering heuristics to reconstruct `#`, `##`, and `###` headings.
+    - Geometric table extraction (`page.find_tables()` -> `tab.to_markdown()`).
+    - Automatic de-hyphenation across line wraps and paragraph joining.
+    - Running header/footer & standalone page-number stripping.
+    - Automatic fallback to Docling if the PDF is a scanned image with no embedded text layer.
+    """
+    from src.mcp_servers.progress import report_mcp_progress
+
+    size_counter: Counter[float] = Counter()
+    pages_dict: list[dict] = []
+    page_tables: list[list[tuple[tuple[float, float, float, float], str]]] = []
+
+    with fitz.open(file_path) as doc:
+        total_pages = doc.page_count
+        report_mcp_progress(
+            0,
+            max(1, total_pages),
+            f"[PyMuPDF] Extracting structured Markdown from '{file_path.name}' ({total_pages} pages, $0 cost)...",
+        )
+
+        for page_idx in range(total_pages):
+            page = doc.load_page(page_idx)
+            p_dict = page.get_text("dict", sort=True)
+            pages_dict.append(p_dict)
+
+            # Collect font-size distribution weighted by character count
+            for block in p_dict.get("blocks", []):
+                if block.get("type") != 0:
+                    continue
+                for line in block.get("lines", []):
+                    for span in line.get("spans", []):
+                        txt = (span.get("text") or "").strip()
+                        if txt:
+                            sz = round(float(span.get("size", 10.0)), 1)
+                            size_counter[sz] += len(txt)
+
+            # Extract any geometric tables on this page
+            tabs_for_page: list[tuple[tuple[float, float, float, float], str]] = []
+            try:
+                finder = page.find_tables()
+                for tab in getattr(finder, "tables", []):
+                    if getattr(tab, "row_count", 0) >= 2 and getattr(tab, "col_count", 0) >= 2:
+                        md_tab = tab.to_markdown().strip()
+                        if md_tab:
+                            tabs_for_page.append((tuple(tab.bbox), md_tab))
+            except Exception:
+                pass
+            page_tables.append(tabs_for_page)
+
+    body_size = size_counter.most_common(1)[0][0] if size_counter else 10.0
+    md_blocks: list[str] = []
+    headings: list[str] = []
+    total_chars = 0
+
+    def _in_table_bbox(bbox: tuple[float, float, float, float], table_bboxes: list[tuple[float, float, float, float]]) -> bool:
+        cx = (bbox[0] + bbox[2]) / 2.0
+        cy = (bbox[1] + bbox[3]) / 2.0
+        for tx0, ty0, tx1, ty1 in table_bboxes:
+            if (tx0 - 4 <= cx <= tx1 + 4) and (ty0 - 4 <= cy <= ty1 + 4):
+                return True
+        return False
+
+    for page_idx, p_dict in enumerate(pages_dict):
+        page_h = float(p_dict.get("height") or 792.0)
+        tabs = page_tables[page_idx]
+        tab_bboxes = [b for b, _ in tabs]
+        emitted_tabs: set[int] = set()
+
+        for block in p_dict.get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            b_bbox = tuple(block.get("bbox", (0.0, 0.0, 0.0, 0.0)))
+
+            # Emit any table that appears vertically above or at this block
+            for t_idx, (t_bbox, t_md) in enumerate(tabs):
+                if t_idx not in emitted_tabs and t_bbox[1] <= b_bbox[1] + 8:
+                    md_blocks.append(t_md)
+                    emitted_tabs.add(t_idx)
+
+            if _in_table_bbox(b_bbox, tab_bboxes):
+                continue
+
+            # Reconstruct lines in this block
+            block_lines: list[tuple[str, float, bool]] = []
+            for line in block.get("lines", []):
+                spans = line.get("spans", [])
+                if not spans:
+                    continue
+                line_text = "".join(s.get("text", "") for s in spans).strip()
+                line_text = re.sub(r"\s+", " ", line_text)
+                if not line_text:
+                    continue
+                max_sz = max(round(float(s.get("size", body_size)), 1) for s in spans if (s.get("text") or "").strip())
+                is_bold = any(_is_span_bold(s) for s in spans if (s.get("text") or "").strip())
+                block_lines.append((line_text, max_sz, is_bold))
+
+            if not block_lines:
+                continue
+
+            # Strip running headers/footers and standalone page numbers at top/bottom margins
+            if len(block_lines) == 1:
+                only_txt = block_lines[0][0]
+                if (b_bbox[1] < page_h * 0.06 or b_bbox[3] > page_h * 0.92) and (
+                    only_txt.isdigit() or len(only_txt) <= 4 or _RUNNING_BANNER_RE.match(only_txt)
+                ):
+                    continue
+
+            para_acc: list[str] = []
+
+            def _flush_para() -> None:
+                nonlocal total_chars
+                if not para_acc:
+                    return
+                merged = ""
+                for part in para_acc:
+                    if not merged:
+                        merged = part
+                    elif merged.endswith("-") and len(merged) >= 2 and merged[-2].isalpha() and part[0].islower():
+                        merged = merged[:-1] + part
+                    else:
+                        merged = merged + " " + part
+                para_acc.clear()
+                total_chars += len(merged)
+                md_blocks.append(merged)
+
+            for l_txt, l_sz, l_bold in block_lines:
+                is_heading = False
+                heading_prefix = "##"
+
+                if page_idx == 0 and l_sz >= body_size + 2.8 and len(l_txt) <= 180:
+                    is_heading = True
+                    heading_prefix = "#"
+                elif l_sz >= body_size + 1.6 and len(l_txt) <= 120 and not l_txt.endswith("."):
+                    is_heading = True
+                    heading_prefix = "##"
+                elif (l_bold or l_sz >= body_size + 0.4) and len(l_txt) <= 100 and not l_txt.endswith("."):
+                    if _SUBSECTION_NUMBER_RE.match(l_txt):
+                        is_heading = True
+                        heading_prefix = "###"
+                    elif _SECTION_HEADER_RE.match(l_txt):
+                        is_heading = True
+                        heading_prefix = "##"
+
+                if is_heading:
+                    _flush_para()
+                    headings.append(l_txt)
+                    total_chars += len(l_txt)
+                    md_blocks.append(f"{heading_prefix} {l_txt}")
+                elif _LIST_ITEM_RE.match(l_txt):
+                    _flush_para()
+                    para_acc.append(l_txt)
+                else:
+                    para_acc.append(l_txt)
+
+            _flush_para()
+
+        # Emit any remaining tables on the page
+        for t_idx, (_, t_md) in enumerate(tabs):
+            if t_idx not in emitted_tabs:
+                md_blocks.append(t_md)
+                emitted_tabs.add(t_idx)
+
+    full_text = "\n\n".join(b for b in md_blocks if b.strip())
+
+    # If the PDF has almost no embedded text (< 40 chars/page), it's likely a scanned image PDF
+    avg_chars_per_page = total_chars / max(1, len(pages_dict))
+    if allow_ocr_fallback and len(pages_dict) > 0 and avg_chars_per_page < 40 and total_chars < 200:
+        logger.warning(
+            "[PyMuPDF] '%s' appears to be a scanned image PDF (avg %.1f chars/page); falling back to Docling OCR.",
+            file_path.name,
+            avg_chars_per_page,
+        )
+        try:
+            return extract_pdf_docling(file_path)
+        except Exception as e:
+            logger.warning("[PyMuPDF] Docling fallback failed for '%s': %s", file_path.name, e)
+
+    report_mcp_progress(
+        max(1, len(pages_dict)),
+        max(1, len(pages_dict)),
+        f"[PyMuPDF] Extracted {len(full_text):,} chars ({len(headings)} headings) from '{file_path.name}'",
+    )
+    return ExtractedContent(text=full_text, headings=headings)
+
 
 _converter_instance = None
 

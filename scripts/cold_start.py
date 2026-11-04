@@ -56,7 +56,7 @@ def _print_cold_start_preflight(
     books_count = sum(1 for f in to_parse if f.is_book)
     docs_count = len(to_parse) - books_count
 
-    extractor_mode = getattr(settings, "EXTRACTOR_MODE", "docling").lower()
+    extractor_mode = getattr(settings, "EXTRACTOR_MODE", "pymupdf").lower().strip()
     vision_model = settings.normalize_litellm_model(
         getattr(settings, "VISION_MODEL", settings.DEFAULT_SUMMARIZATION_MODEL),
         default="openrouter/google/gemini-2.5-flash",
@@ -65,7 +65,12 @@ def _print_cold_start_preflight(
         getattr(settings, "DEFAULT_SUMMARIZATION_MODEL", "openrouter/deepseek/deepseek-chat"),
         default="openrouter/deepseek/deepseek-chat",
     )
-    parser_desc = f"LLM Vision OCR ({vision_model})" if extractor_mode == "llm" else "Local Docling (free)"
+    if extractor_mode == "llm":
+        parser_desc = f"LLM Vision OCR ({vision_model})"
+    elif extractor_mode == "docling":
+        parser_desc = "Local Docling (free)"
+    else:
+        parser_desc = "Local PyMuPDF Fast Markdown ($0 cost)"
 
     lines = [
         f"=== Cold-Start Index Pre-Flight Plan [{scope.upper()}] ===",

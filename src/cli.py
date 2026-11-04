@@ -130,9 +130,34 @@ def migrate_repo_data_to_global(data_dir: Optional[Path] = None) -> list[str]:
     # 4. .env -> ~/.research-agent/.env
     src_env = settings.PROJECT_ROOT / ".env"
     dst_env = target_home / ".env"
-    if src_env.exists() and not dst_env.exists():
-        shutil.copy2(src_env, dst_env)
-        migrated.append(f".env -> {dst_env}")
+    if src_env.exists():
+        if not dst_env.exists():
+            shutil.copy2(src_env, dst_env)
+            migrated.append(f".env -> {dst_env}")
+        else:
+            # Keep EXTRACTOR_MODE in ~/.research-agent/.env synchronized when updated in repo .env
+            try:
+                src_lines = src_env.read_text(encoding="utf-8").splitlines()
+                src_mode_line = next((l for l in src_lines if l.strip().startswith("EXTRACTOR_MODE=")), None)
+                if src_mode_line:
+                    dst_text = dst_env.read_text(encoding="utf-8")
+                    dst_lines = dst_text.splitlines()
+                    updated_lines = []
+                    replaced = False
+                    for line in dst_lines:
+                        if line.strip().startswith("EXTRACTOR_MODE="):
+                            if line.strip() != src_mode_line.strip():
+                                updated_lines.append(src_mode_line.strip())
+                                replaced = True
+                            else:
+                                updated_lines.append(line)
+                        else:
+                            updated_lines.append(line)
+                    if replaced:
+                        dst_env.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+                        migrated.append(f"Synced {src_mode_line.strip()} -> {dst_env}")
+            except OSError:
+                pass
 
     for item in migrated:
         logger.info("Migrated %s", item)
@@ -514,9 +539,38 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Reinstall from GitHub even if local and remote versions match",
     )
 
+    # 9. extract
+    p_extract = sub.add_parser(
+        "extract",
+        help="Convert a single PDF/DOCX/TXT file (or arXiv ID / URL) to Markdown to inspect extraction quality and speed",
+    )
+    p_extract.add_argument(
+        "source",
+        type=str,
+        help="Path to a local PDF/DOCX/TXT file, or an arXiv ID / URL",
+    )
+    p_extract.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        help="Optional output .md file path (if omitted, saves `<stem>.md` in current directory or prints preview)",
+    )
+    p_extract.add_argument(
+        "--mode",
+        choices=["pymupdf", "docling", "llm"],
+        default=None,
+        help="Override EXTRACTOR_MODE ('pymupdf' [default, $0], 'docling', or 'llm')",
+    )
+    p_extract.add_argument(
+        "--stdout",
+        action="store_true",
+        help="Print the full extracted Markdown directly to stdout instead of writing a .md file",
+    )
+
     args = parser.parse_args(argv)
 
-    if args.command == "install-opencode":
+    if args.command in ("install-opencode", "install"):
         res = install_opencode(
             opencode_config_dir=args.opencode_dir,
             enable_by_default=args.enable_by_default,
@@ -689,6 +743,57 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(res.message)
         if not res.upgraded and res.message.startswith("Upgrade failed:"):
             return 1
+        return 0
+
+    if args.command == "extract":
+        import time
+        from src.cold_start.extractor import extract_content
+
+        if args.mode:
+            settings.EXTRACTOR_MODE = args.mode
+
+        active_mode = getattr(settings, "EXTRACTOR_MODE", "pymupdf").lower()
+        t0 = time.perf_counter()
+        src_str = args.source.strip()
+        local_path = Path(src_str).expanduser()
+
+        if local_path.exists() and local_path.is_file():
+            extracted = extract_content(local_path)
+            if not extracted or not extracted.text.strip():
+                logger.error("No text extracted from %s", local_path)
+                return 1
+            md_text = extracted.text
+            headings = extracted.headings
+            default_out = Path.cwd() / f"{local_path.stem}.md"
+        else:
+            from src.mcp_servers.file_tools import _clean_filename, _resolve_paper_content
+
+            resolved = _resolve_paper_content(url_or_arxiv_id=src_str, temp_id="cli-extract")
+            md_text = resolved.get("text", "")
+            if not md_text.strip():
+                logger.error("Could not resolve or extract '%s'", src_str)
+                return 1
+            headings = [l.strip("# ").strip() for l in md_text.splitlines() if l.startswith("#")]
+            default_out = Path.cwd() / f"{_clean_filename(resolved.get('title') or 'extracted')}.md"
+
+        elapsed = time.perf_counter() - t0
+        if args.stdout:
+            print(md_text)
+            return 0
+
+        out_path = args.output.expanduser().resolve() if args.output else default_out.resolve()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(md_text, encoding="utf-8")
+        print(
+            f"Extracted Markdown in {elapsed:.2f}s (mode={active_mode}):\n"
+            f"  - Source   : {src_str}\n"
+            f"  - Output   : {out_path}\n"
+            f"  - Size     : {len(md_text):,} chars ({len(md_text.splitlines()):,} lines)\n"
+            f"  - Headings : {len(headings)} detected"
+        )
+        if headings:
+            preview_h = ", ".join(headings[:8]) + ("..." if len(headings) > 8 else "")
+            print(f"  - Sections : {preview_h}")
         return 0
 
     return 0

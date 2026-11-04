@@ -308,6 +308,27 @@ def test_cli_rm_and_index_dry_run(monkeypatch, tmp_path, capsys):
     saved = json.loads(vtree_path.read_text(encoding="utf-8"))
     assert saved["root"]["children"][0]["children"] == []
 
+    # 3. `ra-cli extract` converts a local PDF to a .md file using PyMuPDF
+    import fitz
+
+    test_pdf = tmp_path / "test_extract.pdf"
+    doc = fitz.open()
+    pg = doc.new_page()
+    pg.insert_text((72, 80), "Fast PDF Extraction Test", fontsize=16)
+    pg.insert_text((72, 120), "1 Introduction", fontsize=12)
+    pg.insert_text((72, 150), "This is extracted in milliseconds with PyMuPDF.", fontsize=10)
+    doc.save(str(test_pdf))
+    doc.close()
+
+    out_md = tmp_path / "out_extracted.md"
+    rc_ext = cli.main(["extract", str(test_pdf), "-o", str(out_md)])
+    assert rc_ext == 0
+    assert out_md.exists()
+    md_content = out_md.read_text(encoding="utf-8")
+    assert "# Fast PDF Extraction Test" in md_content
+    assert "This is extracted in milliseconds with PyMuPDF." in md_content
+
+
 
 
 

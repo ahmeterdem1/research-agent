@@ -165,8 +165,13 @@ def _extract_pdf_file(
     except Exception as e:
         logger.warning("PyMuPDF inspection failed for %s: %s", pdf_path, e)
 
-    mode = getattr(settings, "EXTRACTOR_MODE", "docling").lower()
-    mode_label = "Vision LLM OCR" if mode == "llm" else "Docling"
+    mode = getattr(settings, "EXTRACTOR_MODE", "pymupdf").lower().strip()
+    if mode == "llm":
+        mode_label = "Vision LLM OCR"
+    elif mode == "docling":
+        mode_label = "Docling"
+    else:
+        mode_label = "PyMuPDF ($0 fast)"
     doc_label = label or pdf_path.name
     if tracker is not None:
         pg_info = f"{page_count} pages" if page_count is not None else "PDF"
@@ -179,7 +184,7 @@ def _extract_pdf_file(
         if extracted and extracted.text and extracted.text.strip():
             return extracted.text, page_count
     except Exception as e:
-        logger.warning("Docling extraction failed for %s (%s); falling back to PyMuPDF text", pdf_path, e)
+        logger.warning("Structured PDF extraction failed for %s (%s); falling back to raw PyMuPDF text", pdf_path, e)
 
     joined = "\n\n".join(p.strip() for p in fallback_text_parts if p.strip())
     return (joined if joined else None), page_count

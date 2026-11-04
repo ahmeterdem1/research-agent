@@ -252,7 +252,7 @@ def _build_preflight_report(
     extraction or LLM calls are made.
     Returns `(report_text, new_pages_total, repair_pages_total)`.
     """
-    extractor_mode = getattr(settings, "EXTRACTOR_MODE", "docling").lower()
+    extractor_mode = getattr(settings, "EXTRACTOR_MODE", "pymupdf").lower().strip()
     vision_model = settings.normalize_litellm_model(
         getattr(settings, "VISION_MODEL", settings.DEFAULT_SUMMARIZATION_MODEL),
         default="openrouter/google/gemini-2.5-flash",
@@ -261,7 +261,12 @@ def _build_preflight_report(
         getattr(settings, "DEFAULT_SUMMARIZATION_MODEL", "openrouter/deepseek/deepseek-chat"),
         default="openrouter/deepseek/deepseek-chat",
     )
-    parser_desc = f"LLM Vision OCR ({vision_model})" if extractor_mode == "llm" else "Local Docling (free)"
+    if extractor_mode == "llm":
+        parser_desc = f"LLM Vision OCR ({vision_model})"
+    elif extractor_mode == "docling":
+        parser_desc = "Local Docling (free)"
+    else:
+        parser_desc = "Local PyMuPDF Fast Markdown ($0 cost)"
 
     new_pages = sum((f.page_count or 1) for f in unindexed)
     repair_pages = sum(_estimate_node_pages(n) for n in inconsistent_nodes)

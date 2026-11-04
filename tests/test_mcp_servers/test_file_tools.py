@@ -671,6 +671,64 @@ def test_stage_paper_verbose_progress_and_timing(monkeypatch, tmp_path):
     assert any("Summarizing 'Position The Platonic Representation Hypothesis'" in msg for _, _, msg in progress_events)
 
 
+def test_extract_pdf_pymupdf_structured_markdown_and_default_mode(monkeypatch, tmp_path):
+    """
+    Verify:
+    1. `settings.EXTRACTOR_MODE` defaults to `'pymupdf'`.
+    2. `extract_content` on a PDF uses `extract_pdf_pymupdf` by default at $0 cost.
+    3. `extract_pdf_pymupdf` reconstructs `#` title headings, `##` section headings,
+       `###` subsection headings, de-hyphenates wrapped words (`repre-\\nsentation` -> `representation`),
+       and strips bottom page numbers.
+    """
+    import fitz
+    from config import settings
+    from src.cold_start.extractor import extract_content, extract_pdf_pymupdf
+
+    assert settings.EXTRACTOR_MODE.lower() == "pymupdf"
+
+    pdf_path = tmp_path / "sample_paper.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+
+    # Title (16pt)
+    page.insert_text((72, 80), "The Platonic Representation Hypothesis", fontsize=16, fontname="helv")
+    # Section heading (12pt)
+    page.insert_text((72, 130), "1 Introduction", fontsize=12, fontname="hebo")
+    # Body paragraph with hyphenated line wrap (10pt)
+    page.insert_text(
+        (72, 160),
+        "Neural networks trained across modalities converge in their internal repre-\n"
+        "sentation space as model scale increases.",
+        fontsize=10,
+        fontname="helv",
+    )
+    # Subsection heading (11pt bold)
+    page.insert_text((72, 220), "1.1 Convergence Metrics", fontsize=11, fontname="hebo")
+    page.insert_text(
+        (72, 245),
+        "We measure alignment using mutual nearest neighbors across vision and language.",
+        fontsize=10,
+        fontname="helv",
+    )
+    # Standalone bottom page number (should be stripped)
+    page.insert_text((300, 760), "1", fontsize=9, fontname="helv")
+
+    doc.save(str(pdf_path))
+    doc.close()
+
+    res = extract_content(pdf_path)
+    assert res is not None
+    assert "# The Platonic Representation Hypothesis" in res.text
+    assert "## 1 Introduction" in res.text
+    assert "### 1.1 Convergence Metrics" in res.text
+    # De-hyphenated "repre-\nsentation" -> "representation"
+    assert "internal representation space" in res.text
+    assert "The Platonic Representation Hypothesis" in res.headings
+    assert "1 Introduction" in res.headings
+    assert "1.1 Convergence Metrics" in res.headings
+
+
+
 
 
 

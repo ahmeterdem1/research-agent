@@ -107,7 +107,9 @@ DEFAULT_SUMMARIZATION_MODEL = normalize_litellm_model(
 )
 
 # Extraction Configuration
-EXTRACTOR_MODE = os.getenv("EXTRACTOR_MODE", "docling")  # 'docling' or 'llm'
+# Supported modes: 'pymupdf' (default, fast local native PDF->Markdown, $0 cost),
+# 'docling' (local vision neural networks), or 'llm' (OpenRouter Vision LLM OCR).
+EXTRACTOR_MODE = os.getenv("EXTRACTOR_MODE", "pymupdf")
 VISION_MODEL = normalize_litellm_model(
     os.getenv("VISION_MODEL", "openrouter/google/gemini-2.5-flash"),
     default="openrouter/google/gemini-2.5-flash",
