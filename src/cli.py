@@ -508,6 +508,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # 8. upgrade
     p_upgrade = sub.add_parser(
         "upgrade",
+        aliases=["update"],
         help="Upgrade the system-wide Research Agent installation from GitHub (or Homebrew) without modifying local dev files",
     )
     p_upgrade.add_argument(
