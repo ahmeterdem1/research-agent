@@ -223,7 +223,21 @@ def query_kg(
     limit: int = 50,
 ) -> str:
     """
-    Pattern-matches facts in the Knowledge Graph. Every argument is an optional filter.
+    PROACTIVE KG LOOKUP TOOL — Pattern-matches facts in the Knowledge Graph (supporting both exact
+    and partial/keyword entity matching on `subject` and `object`).
+
+    WHEN TO CALL THIS TOOL:
+    - **Before Recommending or Fetching Papers**: Call `query_kg(subject="User", relation="has_read")`
+      (or `object="<topic>"`) to check which papers the user has already read in past sessions so you
+      can build on their reading history instead of repeating basics.
+    - **When Discussing a Hypothesis or Argument**: Call `query_kg(relation="argued_that")` or
+      `query_kg(relation="contradicts")` to check prior claims and see if a new claim aligns with or
+      contradicts earlier arguments.
+    - **When Exploring a Concept or Topic**: Call `query_kg(relation="covers", object="<concept>")`
+      to find papers linked to that concept across previous sessions.
+    - **Before Calling `update_triplet` or `retract_triplet`**: If the triplet `[#id]` is not already
+      visible in the current chat context, call `query_kg` to look up its ID.
+    *(Note: Do not re-query facts that were already loaded or recorded in the current chat window.)*
 
     Scope filtering (`scope`):
     - `"all"` (default): Returns both `[GLOBAL]` facts and `[PROJECT: <current>]` facts for the
@@ -309,17 +323,25 @@ def retract_triplet(triplet_id: int, reason: str) -> str:
 @track_tool("ra_kg")
 def get_user_profile_summary(scope: Literal["all", "global", "project"] = "all") -> str:
     """
-    SESSION-START MEMORY LOADER — Call this tool at the beginning of a conversation (or before
-    answering research/important questions) to load what is already known about the user!
+    SESSION-START & PERSONALIZATION MEMORY LOADER — Loads everything known about the user from
+    previous sessions!
+
+    WHEN TO CALL THIS TOOL:
+    1. **At Session Start (Turn 1)**: Call this tool on your very first turn in a conversation—even
+       if your first turn also calls `search_library` or `scholar_search`!
+    2. **Before Tailoring Explanations or Paper Recommendations**: If you have not called
+       `get_user_profile_summary` yet in the current chat session, call it before explaining complex
+       concepts or suggesting papers so you respect the user's `Background`, `Preferences`, `Past mistakes`,
+       `Arguments`, and `Reading history` (`has_read`).
+    *(Once called in a session, its output stays in your chat context, so you do not need to call it
+    again in the same session. Note: this tool only returns `User` edges; to inspect `Paper`, `Concept`,
+    or `Topic` connections, call `get_related_facts` or `query_kg`.)*
 
     Returns the user's profile separated into:
     1. `# Global User Profile (Applies Across All Projects)` — permanent background, reading
        history, long-term interests, and general preferences.
     2. `# Current Project Profile (project: <name>)` — hypotheses, arguments, and preferences
        specific to the active OpenCode workspace.
-
-    Pass `scope="global"` or `scope="project"` to inspect only one layer, or leave `scope="all"`
-    (default) to see both clearly separated.
     """
     store = get_store()
     store.reap_expired()
@@ -334,9 +356,13 @@ def get_user_profile_summary(scope: Literal["all", "global", "project"] = "all")
 @track_tool("ra_kg")
 def search_entities(query: str, entity_class: Optional[str] = None, limit: int = 20) -> str:
     """
-    Finds entities whose name contains `query` (case-insensitive). Use this to discover
-    the exact canonical name of a Topic, Paper, Concept, etc. before calling `query_kg`,
-    and to reuse existing names in `add_triplet` instead of creating near-duplicates.
+    Searches entities in the Knowledge Graph by keyword or multi-word phrase (case-insensitive,
+    with automatic multi-token fallback).
+
+    WHEN TO CALL THIS TOOL:
+    - When you want to browse existing `Topic`, `Paper`, `Concept`, or `Argument` entities in the KG
+      (e.g. `search_entities(query="representation", entity_class="Concept")`) to reuse canonical
+      entity names in `add_triplet` instead of creating near-duplicate nodes.
     """
     results = get_store().search_entities(query, entity_class=entity_class, limit=limit)
     if not results:
@@ -352,8 +378,16 @@ def get_related_facts(
     scope: Literal["all", "global", "project"] = "all",
 ) -> str:
     """
-    Returns live facts within `depth` hops of an entity, walking relations in both
-    directions across the requested `scope` (`"all"`, `"global"`, or `"project"`).
+    TOPIC & LITERATURE GRAPH CONTEXT LOADER — Returns live facts within `depth` hops of a Topic,
+    Paper, Concept, or Argument (walking edges in both directions, with automatic partial/keyword
+    entity matching).
+
+    WHEN TO CALL THIS TOOL:
+    - **When Switching to or Exploring a Research Topic / Concept / Paper**: Remember that
+      `get_user_profile_summary` only loads `User` facts—it does NOT load `Paper --covers--> Concept`,
+      `Paper --references--> Paper`, `Topic --related_to--> Topic`, or `Argument --contradicts--> Argument`!
+      Whenever the user asks about a topic, concept, or paper, call `get_related_facts(entity="<topic or paper>")`
+      to recall literature connections and arguments recorded across past sessions.
     """
     depth = max(1, min(depth, 3))
     try:

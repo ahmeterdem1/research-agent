@@ -335,7 +335,7 @@ def query_kg(
     limit: int = 50,
 ) -> str
 ```
-* **Purpose**: Pattern-matches facts across the Knowledge Graph.
+* **Purpose**: Pattern-matches facts across the Knowledge Graph. Automatically falls back to substring and multi-token entity matching on `subject` and `object` when an exact entity name match is not found.
 * **Scope Isolation**:
   * `scope="all"` (default): Returns all matching `[GLOBAL]` facts PLUS matching `[PROJECT: <active_project_id>]` facts, while automatically excluding facts local to *other* projects.
   * `scope="global"`: Returns only global facts.
@@ -390,7 +390,7 @@ def get_related_facts(
     scope: Literal["all", "global", "project"] = "all",
 ) -> str
 ```
-* **Purpose**: Breadth-first graph neighbourhood traversal (up to 3 hops, walking edges in both directions) starting from `entity`, respecting liveness and `scope` isolation.
+* **Purpose**: Breadth-first graph neighbourhood traversal (up to 3 hops, walking edges in both directions) starting from `entity` (with automatic partial/token entity name resolution), respecting liveness and `scope` isolation.
 
 ### 4.9 `get_ontology`
 ```python

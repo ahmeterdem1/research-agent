@@ -233,4 +233,13 @@ def test_remember_user_fact_and_auto_inferred_add_triplet(isolated_store):
         in r_auto_lit
     )
 
+    # Partial / multi-token entity lookup in `query_kg` and `get_related_facts` without exact string match
+    q_partial = kg_tools.query_kg(object="platonic hypothesis")
+    assert "The Platonic Representation Hypothesis" in q_partial
+
+    rel_partial = kg_tools.get_related_facts(entity="platonic representation")
+    assert "Representation Convergence" in rel_partial
+    assert "The Platonic Representation Hypothesis" in rel_partial
+
+
 

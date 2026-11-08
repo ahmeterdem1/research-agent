@@ -4,8 +4,10 @@
 When any of the Research Agent MCP servers are enabled in the current OpenCode project:
 
 - **Dual-Scope Knowledge Graph & Proactive User Memory (`ra_kg_*`)**:
-  - **Session Start Rule**: At the beginning of a conversation (or before answering personalized research questions), call `ra_kg_get_user_profile_summary(scope="all")` to load both the Global User Profile (`[GLOBAL]`) and the Current Project Profile (`[PROJECT: <name>]`).
-  - **Proactive Every-Turn Memory Rule (DO NOT WAIT TO BE ASKED)**: Whenever the user mentions any personal or research context during normal conversation, AUTOMATICALLY call `ra_kg_remember_user_fact(category, fact, scope=..., context=...)` in the same turn:
+  - **Reading from the KG (`get_user_profile_summary`, `get_related_facts`, `query_kg`)**:
+    * **Session Start Rule**: On your first turn in a conversation (even alongside `ra_docs_search_library`), call `ra_kg_get_user_profile_summary(scope="all")` to load both the Global User Profile (`[GLOBAL]`) and the Current Project Profile (`[PROJECT: <name>]`). If you have not called `get_user_profile_summary` yet in the session, call it before tailoring explanations or recommending papers.
+    * **Topic & Literature Graph Lookup**: `get_user_profile_summary` only returns `User` edges—it does NOT return `Paper --covers--> Concept`, `Paper --references--> Paper`, `Topic --related_to--> Topic`, or `Argument --contradicts--> Argument`. Whenever the user asks about a research topic, concept, or paper (or before recommending papers / evaluating a hypothesis), call `ra_kg_get_related_facts(entity="<topic or concept>")` or `ra_kg_query_kg(...)` to recall cross-session knowledge. *(Do not re-query facts that were already loaded or recorded in the current chat window.)*
+  - **Writing to the KG — Proactive Every-Turn Memory Rule (DO NOT WAIT TO BE ASKED)**: Whenever the user mentions any personal or research context during normal conversation, AUTOMATICALLY call `ra_kg_remember_user_fact(category, fact, scope=..., context=...)` in the same turn:
     * `category="background"` (`has_fact`, `scope="global"`): User's academic role, thesis, expertise, or background.
     * `category="interest"` (`interested_in`, `scope="global"`): Research topics or domains the user cares about or asks to explore.
     * `category="preference"` (`prefers`, `scope="global"` or `"project"`): Preferred explanation depth, math rigor, tools, or workflows.

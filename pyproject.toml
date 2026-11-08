@@ -1,7 +1,7 @@
 [project]
 name = "research-agent"
-version = "0.1.1"
-description = "Add your description here"
+version = "0.1.2"
+description = "An extension to opencode for a dedicated research agent and related mcp tools"
 readme = "README.md"
 authors = [
     { name = "ahmeterdem1", email = "ahmetblk1035@gmail.com" }

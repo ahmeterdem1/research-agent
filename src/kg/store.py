@@ -550,7 +550,62 @@ class KGStore:
 
         with connect(self.db_path) as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [self._row_to_triplet(r) for r in rows]
+        if rows:
+            return [self._row_to_triplet(r) for r in rows]
+
+        # Automatic relaxed fallback when exact subject/object entity names don't match
+        if not subject and not object_:
+            return []
+
+        subj_ids: list[int] = []
+        obj_ids: list[int] = []
+        if subject:
+            subj_matches = self.search_entities(subject, entity_class=subject_class, limit=10)
+            if not subj_matches:
+                return []
+            subj_ids = [e.id for e in subj_matches]
+        if object_:
+            obj_matches = self.search_entities(object_, entity_class=object_class, limit=10)
+            if not obj_matches:
+                return []
+            obj_ids = [e.id for e in obj_matches]
+
+        fb_where, fb_params = [scope_sql], [*scope_params]
+        if subj_ids:
+            placeholders = ", ".join("?" for _ in subj_ids)
+            fb_where.append(f"t.subject_id IN ({placeholders})")
+            fb_params.extend(subj_ids)
+        if obj_ids:
+            placeholders = ", ".join("?" for _ in obj_ids)
+            fb_where.append(f"t.object_id IN ({placeholders})")
+            fb_params.extend(obj_ids)
+        if relation:
+            fb_where.append("t.relation = ? COLLATE NOCASE")
+            fb_params.append(relation.strip())
+        if subject_class:
+            fb_where.append("s.class = ? COLLATE NOCASE")
+            fb_params.append(subject_class)
+        if object_class:
+            fb_where.append("o.class = ? COLLATE NOCASE")
+            fb_params.append(object_class)
+        if min_confidence > 0:
+            fb_where.append("t.confidence >= ?")
+            fb_params.append(min_confidence)
+        if active_only:
+            live_sql, live_params = self._live_clause("t")
+            fb_where.append(live_sql)
+            fb_params += live_params
+
+        fb_sql = (
+            _TRIPLET_SELECT
+            + " WHERE "
+            + " AND ".join(fb_where)
+            + " ORDER BY t.updated_at DESC, t.id DESC LIMIT ?"
+        )
+        fb_params.append(limit)
+        with connect(self.db_path) as conn:
+            fb_rows = conn.execute(fb_sql, fb_params).fetchall()
+        return [self._row_to_triplet(r) for r in fb_rows]
 
     def reap_expired(self) -> int:
         """Soft-delete all facts past their expiry. Returns the number reaped."""
@@ -580,13 +635,19 @@ class KGStore:
         ``entity``, filtered by ``scope`` ('all' = global + current project).
         """
         start = self.get_entity(entity, entity_class)
-        if start is None:
-            return []
+        if start is not None:
+            start_ids = [start.id]
+        else:
+            matches = self.search_entities(entity, entity_class=entity_class, limit=5)
+            if not matches:
+                return []
+            start_ids = [e.id for e in matches]
 
         live_sql, live_params = self._live_clause("t")
         scope_sql, scope_params = self._scope_filter_clause(scope, project_id, alias="t")
-        seen_nodes, seen_edges = {start.id}, {}
-        frontier = deque([(start.id, 0)])
+        seen_nodes = set(start_ids)
+        seen_edges = {}
+        frontier = deque((sid, 0) for sid in start_ids)
 
         with connect(self.db_path) as conn:
             while frontier and len(seen_edges) < limit:
