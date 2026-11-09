@@ -1,6 +1,6 @@
 [project]
 name = "research-agent"
-version = "0.1.2"
+version = "0.1.3"
 description = "An extension to opencode for a dedicated research agent and related mcp tools"
 readme = "README.md"
 authors = [

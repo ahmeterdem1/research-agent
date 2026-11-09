@@ -177,8 +177,20 @@ def list_tree(
 def get_document(
     virtual_path: str,
     scope: Literal["global", "project"] = "global",
+    start_line: int = 1,
+    end_line: Optional[int] = None,
 ) -> str:
-    """Gets the full extracted Markdown text of a local document by its virtual path."""
+    """
+    Reads the extracted Markdown text of a local document by its virtual path in paginated line
+    ranges (up to 400 lines per call) with a `Document Outline (Headings & Line Numbers)`.
+
+    - On the first call (`start_line=1`), returns lines 1–400 plus the document's heading outline
+      (`L15: # 1. Introduction`, `L180: ## 3. Experiments`, etc.).
+    - To read further or jump directly to a specific section, pass `start_line` and `end_line`
+      (e.g. `get_document(virtual_path="/...", scope="global", start_line=401, end_line=800)`).
+    """
+    from src.mcp_servers.pagination import paginate_document_text
+
     try:
         manager = get_manager() if scope == "global" else get_manager("project")
     except FileNotFoundError as e:
@@ -247,7 +259,15 @@ def get_document(
         )
 
     try:
-        return resolved_text_path.read_text(encoding="utf-8")
+        raw_text = resolved_text_path.read_text(encoding="utf-8")
+        return paginate_document_text(
+            raw_text,
+            source_label=f"{virtual_path} ({scope})",
+            tool_name="get_document",
+            tool_arg_hint=f'virtual_path="{virtual_path}", scope="{scope}"',
+            start_line=start_line,
+            end_line=end_line,
+        )
     except Exception as e:
         logger.error("Failed reading document text at %s: %s", text_path, e)
         return f"Error reading document text: {e}"

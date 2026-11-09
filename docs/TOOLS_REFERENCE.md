@@ -89,9 +89,11 @@ def list_doc_summaries(
 def get_document(
     virtual_path: str,
     scope: Literal["global", "project"] = "global",
+    start_line: int = 1,
+    end_line: Optional[int] = None,
 ) -> str
 ```
-* **Purpose**: Reads and returns the full extracted Markdown text (headings, paragraphs, LaTeX math, HTML tables) of a document or book section from its cached `text_path` (`~/.research-agent/cache/texts/<sha256>.md`).
+* **Purpose**: Reads and returns the extracted Markdown text of a document or book section from its cached `text_path` (`~/.research-agent/cache/texts/<sha256>.md`) in paginated line ranges (up to `400` lines / `35 KB` per call) with a `Document Outline (Headings & Line Numbers)` (`L12: # 1. Introduction`, `L145: ## 2. Methodology`) so the agent can jump directly to specific sections or paginate cleanly.
 
 ### 1.6 `get_documents`
 ```python
@@ -161,12 +163,13 @@ def get_paper_citations(paper_id_or_doi: str, limit: int = 10) -> str
 ```python
 def read_online_document(
     url_or_arxiv_id: str,
-    ctx: Optional[Context] = None,
+    start_line: int = 1,
+    end_line: Optional[int] = None,
 ) -> str
 ```
-* **Purpose**: Fetches and extracts the full text of an online paper or web article while streaming live MCP progress updates:
-  * **If given an arXiv ID or arXiv URL** (e.g. `"1706.03762"` or `"arxiv:1706.03762"`): Downloads `https://arxiv.org/pdf/<id>.pdf` to a temporary file, extracts structured Markdown via `EXTRACTOR_MODE` (`pymupdf` by default for instant zero-cost local extraction, or `docling` / `llm`), caches the result under `~/.research-agent/cache/online_docs/arxiv_<id>.md`, cleans up the temp PDF, and returns the Markdown.
-  * **If given a standard HTTP/HTTPS URL**: Fetches the HTML, extracts clean text via `BeautifulSoup`, and caches it under `~/.research-agent/cache/online_docs/url_<sha256>.md`.
+* **Purpose**: Fetches, caches, and returns the extracted Markdown/text of an online paper or web article in paginated line ranges (up to `400` lines / `35 KB` per call) with a `Document Outline (Headings & Line Numbers)`:
+  * **If given an arXiv ID or arXiv URL** (e.g. `"1706.03762"` or `"arxiv:1706.03762"`): Downloads `https://arxiv.org/pdf/<id>.pdf`, extracts structured Markdown via `EXTRACTOR_MODE` (`pymupdf` by default for instant zero-cost local extraction, or `docling` / `llm`), caches both PDF and Markdown under `~/.research-agent/cache/online_docs/arxiv_<id>.md`, and returns the requested `[start_line, end_line]` slice with the document's heading outline.
+  * **If given a standard HTTP/HTTPS URL**: Fetches the HTML, strips `<script>`, `<style>`, `<nav>`, `<header>`, `<footer>`, and `<aside>` boilerplate, converts `<h1>`–`<h6>` tags to Markdown headings, caches the cleaned document under `~/.research-agent/cache/online_docs/url_<sha256>.md` (so follow-up paginated reads are instant with `0` network calls), and returns the requested `[start_line, end_line]` slice with its heading outline.
 * **Zero-Cost Staging Reuse**: Any document read via `read_online_document` is automatically reused from `~/.research-agent/cache/online_docs/` if the user subsequently asks to save it via `stage_paper`, avoiding any duplicate download or PDF re-extraction.
 * **Agent Rule**: Must only be called *after* `ra_docs_search_library` confirms the paper is not already stored locally.
 

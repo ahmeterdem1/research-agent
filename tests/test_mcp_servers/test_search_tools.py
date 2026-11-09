@@ -94,3 +94,43 @@ def test_get_paper_references_and_citations_tools(mock_cits, mock_refs):
     assert "Foundational Paper" in ref_out and "r1" in ref_out
     assert "Follow-up Paper" in cit_out and "c1" in cit_out
 
+
+@patch("src.mcp_servers.search_tools.requests.get")
+def test_read_online_document_pagination_outline_and_boilerplate_stripping(mock_get):
+    body_paragraphs = "\n".join(f"<p>Paragraph line {i} of the article.</p>" for i in range(1, 510))
+    html = (
+        "<html><head><script>console.log('noise');</script><style>.x{color:red}</style></head>"
+        "<body>"
+        "<nav>Top Menu Link 1 | Top Menu Link 2</nav>"
+        "<article>"
+        "<h1>1. Introduction</h1>"
+        f"{body_paragraphs}"
+        "<h2>2. Conclusion</h2>"
+        "<p>Final summary paragraph.</p>"
+        "</article>"
+        "<footer>Copyright Footer Noise</footer>"
+        "</body></html>"
+    )
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.text = html
+    mock_get.return_value = mock_response
+
+    # Page 1: lines 1-400 + outline + continuation footer
+    page1 = read_online_document("https://example.org/long-post", start_line=1)
+    assert "Showing lines 1-400 of" in page1
+    assert "Document Outline (Headings & Line Numbers):" in page1
+    assert "# 1. Introduction" in page1
+    assert "## 2. Conclusion" in page1
+    assert "Top Menu Link 1" not in page1
+    assert "Copyright Footer Noise" not in page1
+    assert "console.log" not in page1
+    assert "start_line=401" in page1
+
+    # Page 2: lines 401-600 reaches end of document
+    page2 = read_online_document("https://example.org/long-post", start_line=401, end_line=600)
+    assert "Showing lines 401-" in page2
+    assert "Final summary paragraph." in page2
+    assert "End of document reached" in page2
+
+

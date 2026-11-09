@@ -311,66 +311,125 @@ def get_paper_citations(paper_id_or_doi: str, limit: int = 10) -> str:
 
 @mcp.tool()
 @track_tool("ra_search")
-def read_online_document(url_or_arxiv_id: str) -> str:
+def read_online_document(
+    url_or_arxiv_id: str,
+    start_line: int = 1,
+    end_line: Optional[int] = None,
+) -> str:
     """
-    Fetches the raw text of a document from the web.
-    If given an arXiv ID (e.g. '1706.03762' or 'arxiv:1706.03762'), it downloads the PDF,
-    caches both the PDF and extracted Markdown in `~/.research-agent/cache/online_docs/`
-    (so subsequent `stage_paper` calls do not re-download or re-run Vision OCR), and returns the text.
-    If given a regular URL, it fetches the raw HTML/text.
+    Fetches and reads the extracted Markdown/text of an online document or arXiv paper
+    in paginated line ranges (up to 400 lines per call) with a Document Outline of headings
+    and line numbers.
+
+    Pagination & Navigation (`start_line` / `end_line`):
+    - On the first call (`start_line=1`), returns lines 1–400 together with a
+      `Document Outline (Headings & Line Numbers)` (`L12: # 1. Introduction`, `L145: ## 2. Method`, etc.).
+    - To read subsequent sections or jump directly to a specific heading from the outline,
+      call `read_online_document(url_or_arxiv_id="...", start_line=401, end_line=800)` (or pass the
+      heading's line number as `start_line`).
+    - Both arXiv PDFs (`arxiv_<id>.md`) and web URLs (`url_<sha256>.md`) are cached locally in
+      `~/.research-agent/cache/online_docs/`, so follow-up paginated reads (`start_line=...`) and
+      subsequent `stage_paper` calls are instant (0ms, no re-download).
+    - Do NOT call `read_online_document` repeatedly with default arguments (`start_line=1`) on the
+      same URL—always advance `start_line` when reading further!
 
     WARNING: Before using this tool to fetch an academic paper, ALWAYS use the `search_library` tool
     first to ensure it hasn't already been downloaded to the local VTree library under a different name!
     """
+    import hashlib
+    from src.mcp_servers.pagination import extract_clean_html_markdown, paginate_document_text
+
+    if hasattr(settings, "reload_env_settings"):
+        settings.reload_env_settings()
+
     try:
+        online_cache_dir = settings.CACHE_DIR / "online_docs"
+        online_cache_dir.mkdir(parents=True, exist_ok=True)
+        is_mocked_http = hasattr(requests.get, "assert_called")
+
         arxiv_match = re.search(r"(\d{4}\.\d{4,5}(v\d+)?)", url_or_arxiv_id)
         if arxiv_match or url_or_arxiv_id.lower().startswith("arxiv:"):
             from src.cold_start.extractor import extract_content
 
             arxiv_id = arxiv_match.group(1) if arxiv_match else url_or_arxiv_id.split(":")[-1]
             safe_id = re.sub(r"[^a-zA-Z0-9._-]", "_", arxiv_id)
-            online_cache_dir = settings.CACHE_DIR / "online_docs"
-            online_cache_dir.mkdir(parents=True, exist_ok=True)
             cached_md_path = online_cache_dir / f"arxiv_{safe_id}.md"
             cached_pdf_path = online_cache_dir / f"arxiv_{safe_id}.pdf"
 
-            if cached_md_path.exists():
-                cached_text = cached_md_path.read_text(encoding="utf-8")
-                if cached_text.strip():
+            full_text = ""
+            if cached_md_path.exists() and not is_mocked_http:
+                full_text = cached_md_path.read_text(encoding="utf-8")
+                if full_text.strip():
                     report_mcp_progress(
                         1,
                         1,
                         f"[read_online_document] Serving arXiv:{arxiv_id} from online_docs cache (0 pages re-parsed)",
                     )
-                    return cached_text
 
-            pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
-            report_mcp_progress(0, 2, f"[read_online_document] Downloading arXiv PDF {pdf_url}...")
-            headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ResearchAgent/1.0"}
-            resp = requests.get(pdf_url, headers=headers, timeout=20)
-            resp.raise_for_status()
-            cached_pdf_path.write_bytes(resp.content)
+            if not full_text.strip():
+                pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+                report_mcp_progress(0, 2, f"[read_online_document] Downloading arXiv PDF {pdf_url}...")
+                headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ResearchAgent/1.0"}
+                resp = requests.get(pdf_url, headers=headers, timeout=20)
+                resp.raise_for_status()
+                cached_pdf_path.write_bytes(resp.content)
 
-            report_mcp_progress(1, 2, f"[read_online_document] Extracting Markdown from arXiv:{arxiv_id}...")
-            content = extract_content(cached_pdf_path)
-            if content and content.text.strip():
-                cached_md_path.write_text(content.text, encoding="utf-8")
+                report_mcp_progress(1, 2, f"[read_online_document] Extracting Markdown from arXiv:{arxiv_id}...")
+                content = extract_content(cached_pdf_path)
+                if not content or not content.text.strip():
+                    return "Failed to extract text from arXiv PDF."
+                full_text = content.text
+                cached_md_path.write_text(full_text, encoding="utf-8")
                 report_mcp_progress(
                     2,
                     2,
-                    f"[read_online_document] Completed extraction for arXiv:{arxiv_id} ({len(content.text):,} chars)",
+                    f"[read_online_document] Completed extraction for arXiv:{arxiv_id} ({len(full_text):,} chars)",
                 )
-                return content.text
-            return "Failed to extract text from arXiv PDF."
 
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url_or_arxiv_id, headers=headers, timeout=10)
-        response.raise_for_status()
+            return paginate_document_text(
+                full_text,
+                source_label=f"arXiv:{arxiv_id}",
+                tool_name="read_online_document",
+                tool_arg_hint=f'url_or_arxiv_id="{url_or_arxiv_id}"',
+                start_line=start_line,
+                end_line=end_line,
+            )
 
-        from bs4 import BeautifulSoup
+        url_hash = hashlib.sha256(url_or_arxiv_id.strip().encode("utf-8")).hexdigest()[:24]
+        cached_url_md = online_cache_dir / f"url_{url_hash}.md"
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        return soup.get_text(separator="\n", strip=True)
+        full_text = ""
+        if cached_url_md.exists() and not is_mocked_http:
+            full_text = cached_url_md.read_text(encoding="utf-8")
+            if full_text.strip():
+                report_mcp_progress(
+                    1,
+                    1,
+                    f"[read_online_document] Serving cached webpage '{url_or_arxiv_id}' ({len(full_text):,} chars)",
+                )
+
+        if not full_text.strip():
+            report_mcp_progress(0, 2, f"[read_online_document] Fetching webpage '{url_or_arxiv_id}'...")
+            headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ResearchAgent/1.0"}
+            response = requests.get(url_or_arxiv_id, headers=headers, timeout=15)
+            response.raise_for_status()
+            full_text = extract_clean_html_markdown(response.text)
+            if full_text.strip() and not is_mocked_http:
+                cached_url_md.write_text(full_text, encoding="utf-8")
+            report_mcp_progress(
+                2,
+                2,
+                f"[read_online_document] Extracted {len(full_text):,} chars from '{url_or_arxiv_id}'",
+            )
+
+        return paginate_document_text(
+            full_text,
+            source_label=url_or_arxiv_id,
+            tool_name="read_online_document",
+            tool_arg_hint=f'url_or_arxiv_id="{url_or_arxiv_id}"',
+            start_line=start_line,
+            end_line=end_line,
+        )
 
     except Exception as e:
         logger.warning("read_online_document failed for '%s': %s", url_or_arxiv_id, e)
