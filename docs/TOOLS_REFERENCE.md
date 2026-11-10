@@ -179,6 +179,26 @@ def walk_citation_graph(start_doi_or_id: str, depth: int = 2) -> str
 ```
 * **Purpose**: Convenience 1-hop summary tool that fetches both backward references and forward citations for `start_doi_or_id` in one call. For deep multi-hop exploration with abstract filtering, the primary agent delegates to the `@citation-walker` subagent.
 
+### 2.8 `openreview_search` (Optional — Requires `ra-cli login-openreview`)
+```python
+def openreview_search(
+    query: str,
+    venue: Optional[str] = None,
+    num_results: int = 5,
+) -> str
+```
+* **Purpose**: Searches OpenReview (`GET https://api2.openreview.net/notes/search`) for conference submissions, preprints, and workshops (ICLR, NeurIPS, ICML, TMLR, COLM, etc.) using the user's personal OpenReview bearer token (`~/.research-agent/openreview_auth.json`).
+* **Graceful Fallback**: If the user has not run `ra-cli login-openreview`, returns a non-failing message instructing the user how to enable it and reminding the agent to use `scholar_search` / `duckduckgo_search`.
+
+### 2.9 `get_openreview_paper` (Optional — Requires `ra-cli login-openreview` for Restricted Notes)
+```python
+def get_openreview_paper(
+    forum_id_or_url: str,
+    include_reviews: bool = True,
+) -> str
+```
+* **Purpose**: Fetches full submission metadata, abstract, TL;DR, PDF link, and (when `include_reviews=True`) a structured summary of **official peer reviews, ratings/scores, strengths/weaknesses, meta-reviews, decisions, and author rebuttals** from the paper's OpenReview forum (`GET /notes?forum=<id>`).
+
 ---
 
 ## 3. `ra_ingest` — User-Gated Paper Ingestion Tools (`FileTools`)

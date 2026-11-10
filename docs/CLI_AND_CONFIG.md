@@ -11,6 +11,7 @@ By default, all persistent data lives in `~/.research-agent/` (overridable via `
 ```text
 ~/.research-agent/
 ├── .env                        # Global API keys & default model settings
+├── openreview_auth.json        # Optional user-authenticated OpenReview token (mode 0600)
 ├── research_agent.db           # SQLite DB: Dual-scope Knowledge Graph + Tool Telemetry
 ├── vtrees/
 │   └── global.json             # Master PC-wide Virtual Document Tree
@@ -210,6 +211,21 @@ ra-cli extract 2405.07987 -o ./platonic_representation.md
 # Override the extraction backend for comparison (pymupdf, docling, or llm) or print to stdout
 ra-cli extract /path/to/paper.pdf --mode pymupdf --stdout
 ```
+
+### 3.10 `ra-cli login-openreview`
+Authenticates with your personal OpenReview account (`POST https://api2.openreview.net/login`) and saves the resulting JWT bearer token in `~/.research-agent/openreview_auth.json` (`chmod 0600`) to enable `ra_search.openreview_search` and `ra_search.get_openreview_paper`. No built-in or default credentials exist—OpenReview access is strictly opt-in per user:
+
+```bash
+# Interactive login (prompts for email/username and hidden password)
+ra-cli login-openreview
+
+# Check current OpenReview authentication status
+ra-cli login-openreview --status
+
+# Log out and delete ~/.research-agent/openreview_auth.json
+ra-cli login-openreview --logout
+```
+
 
 
 

@@ -31,7 +31,7 @@ A local-first academic and technical research extension for [**OpenCode**](https
 Installed once system-wide on your PC, it equips OpenCode with:
 
 1. **Dual-Scope Virtual Document Tree (`ra_docs`)**: A decoupled semantic hierarchy (`vtree.json`) over your PDF/Markdown/DOCX textbooks and papers—supporting both a **PC-wide Global Library** (`~/.research-agent/vtrees/global.json`) and optional **Project-Local Libraries** (`<project>/.opencode/vtree.json`).
-2. **Academic & Web Literature Search (`ra_search`)**: Free DuckDuckGo web search, Semantic Scholar paper search & metadata, arXiv PDF extraction, and forward/backward citation graph edges.
+2. **Academic & Web Literature Search (`ra_search`)**: Free DuckDuckGo web search, Semantic Scholar paper search & metadata, optional authenticated OpenReview search & peer-review inspection (`ra-cli login-openreview`), arXiv/OpenReview PDF extraction, and forward/backward citation graph edges.
 3. **Autonomous Citation Walker Subagent (`@citation-walker`)**: An OpenCode subagent running in an isolated context window that traverses backward references and forward citations over multiple hops and returns a curated bibliography.
 4. **User-Gated Paper Ingestion & Incremental Library Refresh (`ra_ingest`)**: Two-phase staging (`stage_paper` -> `confirm_save_paper`) protected by OpenCode's native `"ask"` permission gate so no paper is ever saved to your library without your explicit confirmation, plus `refresh_library` (`ra-cli refresh`) to incrementally index newly dropped local PDFs/documents into your existing `vtree.json` without losing semantic folder organization.
 5. **Dual-Scope Temporal Knowledge Graph (`ra_kg`)**: An embedded SQLite knowledge graph (`~/.research-agent/research_agent.db`) with TTL expiry, soft-retraction history, extendable ontology, and strict separation between **`[GLOBAL]` user facts** (background, `has_read` reading history, enduring interests, foundational mistakes) and **`[PROJECT: <id>]` workspace facts** (project-specific hypotheses, arguments, and tool preferences).
@@ -68,11 +68,14 @@ EXTRACTOR_MODE=pymupdf
 EOF
 ```
 
-### 3. Register with OpenCode
+### 3. Register with OpenCode (and Optional OpenReview Login)
 Run the installer once to merge the MCP servers, permission gates, agent profiles (`researcher`, `@citation-walker`), and global `AGENTS.md` instructions into `~/.config/opencode/`:
 
 ```bash
 ra-cli install-opencode
+
+# (Optional) Authenticate with your personal OpenReview account to enable openreview_search and peer-review tools
+ra-cli login-openreview
 ```
 *(By default, the 4 MCP servers are registered with `"enabled": false` globally so unrelated coding projects have zero tool-schema overhead until you enable them in a project).*
 
@@ -139,7 +142,7 @@ ra-cli extract 2405.07987 --mode pymupdf
 
 ## Documentation Index
 
-* **[Complete MCP Tools & Subagents Reference (`docs/TOOLS_REFERENCE.md`)](./docs/TOOLS_REFERENCE.md)** — Detailed signatures, parameters, return formats, and behavioral rules for all 26 tools across `ra_docs`, `ra_search`, `ra_ingest`, `ra_kg`, and the cold-start organizer, plus the `researcher` and `@citation-walker` agent profiles.
+* **[Complete MCP Tools & Subagents Reference (`docs/TOOLS_REFERENCE.md`)](./docs/TOOLS_REFERENCE.md)** — Detailed signatures, parameters, return formats, and behavioral rules for all 28 tools across `ra_docs`, `ra_search`, `ra_ingest`, `ra_kg`, and the cold-start organizer, plus the `researcher` and `@citation-walker` agent profiles.
 * **[CLI, Telemetry & Configuration Reference (`docs/CLI_AND_CONFIG.md`)](./docs/CLI_AND_CONFIG.md)** — Complete guide to `ra-cli` commands, environment variables, `.env` precedence, OpenCode configuration merging, and the cold-start pipeline stages.
 
 ---

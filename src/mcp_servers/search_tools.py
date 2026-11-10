@@ -395,6 +395,54 @@ def read_online_document(
                 end_line=end_line,
             )
 
+        from src.openreview_client import extract_openreview_forum_id, get_openreview_headers
+
+        or_forum_id = extract_openreview_forum_id(url_or_arxiv_id)
+        if or_forum_id:
+            from src.cold_start.extractor import extract_content
+
+            safe_or_id = re.sub(r"[^a-zA-Z0-9._-]", "_", or_forum_id)
+            cached_md_path = online_cache_dir / f"openreview_{safe_or_id}.md"
+            cached_pdf_path = online_cache_dir / f"openreview_{safe_or_id}.pdf"
+
+            full_text = ""
+            if cached_md_path.exists() and not is_mocked_http:
+                full_text = cached_md_path.read_text(encoding="utf-8")
+                if full_text.strip():
+                    report_mcp_progress(
+                        1,
+                        1,
+                        f"[read_online_document] Serving OpenReview:{or_forum_id} from online_docs cache",
+                    )
+
+            if not full_text.strip():
+                pdf_url = f"https://openreview.net/pdf?id={or_forum_id}"
+                report_mcp_progress(0, 2, f"[read_online_document] Downloading OpenReview PDF {pdf_url}...")
+                resp = requests.get(pdf_url, headers=get_openreview_headers(), timeout=20, allow_redirects=True)
+                resp.raise_for_status()
+                cached_pdf_path.write_bytes(resp.content)
+
+                report_mcp_progress(1, 2, f"[read_online_document] Extracting Markdown from OpenReview:{or_forum_id}...")
+                content = extract_content(cached_pdf_path)
+                if not content or not content.text.strip():
+                    return f"Failed to extract text from OpenReview PDF ({pdf_url})."
+                full_text = content.text
+                cached_md_path.write_text(full_text, encoding="utf-8")
+                report_mcp_progress(
+                    2,
+                    2,
+                    f"[read_online_document] Completed extraction for OpenReview:{or_forum_id} ({len(full_text):,} chars)",
+                )
+
+            return paginate_document_text(
+                full_text,
+                source_label=f"OpenReview:{or_forum_id}",
+                tool_name="read_online_document",
+                tool_arg_hint=f'url_or_arxiv_id="{url_or_arxiv_id}"',
+                start_line=start_line,
+                end_line=end_line,
+            )
+
         url_hash = hashlib.sha256(url_or_arxiv_id.strip().encode("utf-8")).hexdigest()[:24]
         cached_url_md = online_cache_dir / f"url_{url_hash}.md"
 
@@ -444,6 +492,140 @@ def walk_citation_graph(start_doi_or_id: str, depth: int = 2) -> str:
     For deeper multi-hop exploration, delegate to the `@citation-walker` subagent.
     """
     return cw_run(start_doi_or_id, depth)
+
+
+@mcp.tool()
+@track_tool("ra_search")
+def openreview_search(
+    query: str,
+    venue: Optional[str] = None,
+    num_results: int = 5,
+) -> str:
+    """
+    OPTIONAL OPENREVIEW SEARCH — Searches OpenReview (`https://api2.openreview.net/notes/search`)
+    for conference submissions, preprints, and workshops (ICLR, NeurIPS, ICML, TMLR, COLM, etc.).
+
+    NOTE: This tool requires the user to have logged into OpenReview via `ra-cli login-openreview`.
+    If not configured, it returns a friendly notice so you can fall back to `scholar_search` or
+    `duckduckgo_search`.
+
+    Arguments:
+    - query: Keywords, paper title, or author name to search on OpenReview.
+    - venue: Optional venue filter substring (e.g. `"ICLR"`, `"NeurIPS 2025"`, `"ICML"`, `"TMLR"`).
+    - num_results: Maximum number of matching submissions to return (default `5`).
+    """
+    from src.openreview_client import (
+        OpenReviewAuthError,
+        is_openreview_configured,
+        search_openreview_notes,
+    )
+
+    if not is_openreview_configured():
+        return (
+            "OpenReview API is not configured. OpenReview integration is optional and requires your "
+            "personal OpenReview credentials — run `ra-cli login-openreview` in your terminal to enable it "
+            "(or use `scholar_search` / `duckduckgo_search` instead)."
+        )
+
+    try:
+        items = search_openreview_notes(query=query, venue=venue, limit=max(1, min(num_results, 20)))
+        if not items:
+            return f"No OpenReview papers found matching '{query}'" + (f" (venue='{venue}')." if venue else ".")
+
+        blocks: list[str] = []
+        for p in items:
+            authors = ", ".join(p.get("authors") or []) or "Anonymous / Unknown"
+            year = p.get("year") or "Unknown Year"
+            venue_str = p.get("venue") or "OpenReview"
+            tldr = p.get("tldr")
+            abs_snip = (p.get("abstract") or "")[:350]
+            if len(p.get("abstract") or "") > 350:
+                abs_snip += "..."
+
+            lines = [
+                f"Title: {p.get('title')}",
+                f"Forum ID: {p.get('forum_id')}",
+                f"Venue: {venue_str} ({year})",
+                f"Authors: {authors}",
+                f"Forum URL: {p.get('forum_url')}",
+                f"PDF URL: {p.get('pdf_url')}",
+            ]
+            if tldr:
+                lines.append(f"TL;DR: {tldr}")
+            if abs_snip:
+                lines.append(f"Abstract Snippet: {abs_snip}")
+            lines.append("---")
+            blocks.append("\n".join(lines))
+
+        return "\n".join(blocks)
+    except OpenReviewAuthError as e:
+        return f"OpenReview authentication required: {e}"
+    except Exception as e:
+        logger.warning("openreview_search failed for '%s': %s", query, e)
+        return f"OpenReview search failed: {e}"
+
+
+@mcp.tool()
+@track_tool("ra_search")
+def get_openreview_paper(
+    forum_id_or_url: str,
+    include_reviews: bool = True,
+) -> str:
+    """
+    Fetches full submission details, abstract, TL;DR, PDF link, and (when `include_reviews=True`)
+    official peer reviews, ratings/scores, meta-reviews, decisions, and author rebuttals for an
+    OpenReview paper.
+
+    Arguments:
+    - forum_id_or_url: OpenReview Forum ID (e.g. `'abc123XYZ'`) or URL
+      (`'https://openreview.net/forum?id=abc123XYZ'`).
+    - include_reviews: When `True` (default), includes official peer reviews, ratings, meta-review,
+      and author responses from the paper's OpenReview forum.
+    """
+    from src.openreview_client import (
+        OpenReviewAuthError,
+        get_openreview_forum_details,
+    )
+
+    try:
+        details = get_openreview_forum_details(forum_id_or_url, include_reviews=include_reviews)
+        if not details or not details.get("title"):
+            return f"No OpenReview paper found for '{forum_id_or_url}'."
+
+        authors = ", ".join(details.get("authors") or []) or "Anonymous / Unknown"
+        year = details.get("year") or "Unknown"
+        venue = details.get("venue") or "OpenReview"
+        tldr = details.get("tldr") or "No TL;DR provided"
+        abstract = details.get("abstract") or "No Abstract Available"
+
+        out = [
+            f"Title: {details.get('title')}",
+            f"Forum ID: {details.get('forum_id')}",
+            f"Authors: {authors}",
+            f"Venue: {venue} ({year})",
+            f"Forum URL: {details.get('forum_url')}",
+            f"PDF URL: {details.get('pdf_url')}",
+            "",
+            f"TL;DR: {tldr}",
+            "",
+            f"Abstract:\n{abstract}",
+        ]
+
+        reviews = details.get("reviews") or []
+        if include_reviews:
+            if reviews:
+                out.append(f"\n## OpenReview Forum Replies & Peer Reviews ({len(reviews)}):")
+                for idx, rev in enumerate(reviews, start=1):
+                    out.append(f"\n### [{idx}] {rev['kind']} (by {rev['author']})\n{rev['body']}")
+            else:
+                out.append("\n## OpenReview Forum Replies & Peer Reviews:\nNo public reviews or comments found.")
+
+        return "\n".join(out)
+    except OpenReviewAuthError as e:
+        return f"OpenReview authentication required: {e}"
+    except Exception as e:
+        logger.warning("get_openreview_paper failed for '%s': %s", forum_id_or_url, e)
+        return f"Failed to fetch OpenReview paper: {e}"
 
 
 def main() -> None:

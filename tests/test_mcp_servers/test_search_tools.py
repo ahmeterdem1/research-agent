@@ -134,3 +134,86 @@ def test_read_online_document_pagination_outline_and_boilerplate_stripping(mock_
     assert "End of document reached" in page2
 
 
+def test_openreview_search_unconfigured_and_authenticated(monkeypatch, tmp_path):
+    from config import settings
+    from src import openreview_client
+    from src.mcp_servers.search_tools import get_openreview_paper, openreview_search
+
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path / "ra_home")
+    monkeypatch.delenv("OPENREVIEW_TOKEN", raising=False)
+    monkeypatch.delenv("OPENREVIEW_USERNAME", raising=False)
+    monkeypatch.delenv("OPENREVIEW_PASSWORD", raising=False)
+
+    # 1. Unconfigured -> returns friendly instructions to run `ra-cli login-openreview`
+    unconf_out = openreview_search("Speculative Decoding")
+    assert "not configured" in unconf_out
+    assert "ra-cli login-openreview" in unconf_out
+
+    # 2. Save user credentials via openreview_client and mock API v2 responses
+    openreview_client.save_openreview_auth(
+        {
+            "token": "test_jwt_token_123",
+            "username": "researcher@example.edu",
+            "user_id": "~Researcher_One1",
+        }
+    )
+    assert openreview_client.is_openreview_configured() is True
+
+    sample_forum_Response = {
+        "notes": [
+            {
+                "id": "abcForum123",
+                "forum": "abcForum123",
+                "number": 42,
+                "cdate": 1700000000000,
+                "invitations": ["ICLR.cc/2025/Conference/-/Submission"],
+                "signatures": ["ICLR.cc/2025/Conference/Submission42/Authors"],
+                "content": {
+                    "title": {"value": "Fast Speculative Decoding with Tree Attention"},
+                    "authors": {"value": ["Alice Smith", "Bob Jones"]},
+                    "venue": {"value": "ICLR 2025 Spotlight"},
+                    "venueid": {"value": "ICLR.cc/2025/Conference"},
+                    "abstract": {"value": "We propose tree-based speculative decoding."},
+                    "TL;DR": {"value": "2.5x lossless LLM decoding speedup."},
+                    "keywords": {"value": ["speculative decoding", "transformers"]},
+                },
+            },
+            {
+                "id": "revNote1",
+                "forum": "abcForum123",
+                "replyto": "abcForum123",
+                "invitations": ["ICLR.cc/2025/Conference/Submission42/-/Official_Review"],
+                "signatures": ["ICLR.cc/2025/Conference/Submission42/Reviewer_xYz1"],
+                "content": {
+                    "rating": {"value": "8: Strong Accept"},
+                    "confidence": {"value": "4: Confident"},
+                    "summary": {"value": "Strong theoretical and empirical contribution."},
+                    "strengths": {"value": "Clear speedups across 7B-70B models."},
+                    "weaknesses": {"value": "Minor memory overhead for large tree widths."},
+                    "questions": {"value": "How does it scale with batch size > 16?"},
+                },
+            },
+        ]
+    }
+
+    with patch("src.openreview_client.requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = sample_forum_Response
+        mock_get.return_value = mock_resp
+
+        search_out = openreview_search("Speculative Decoding", venue="ICLR.cc/2025/Conference", num_results=3)
+        assert "Fast Speculative Decoding with Tree Attention" in search_out
+        assert "abcForum123" in search_out
+        assert "ICLR 2025 Spotlight" in search_out
+        assert "2.5x lossless LLM decoding speedup." in search_out
+
+        forum_out = get_openreview_paper("https://openreview.net/forum?id=abcForum123", include_reviews=True)
+        assert "Fast Speculative Decoding with Tree Attention" in forum_out
+        assert "OpenReview Forum Replies & Peer Reviews (1)" in forum_out
+        assert "Reviewer_xYz1" in forum_out
+        assert "8: Strong Accept" in forum_out
+        assert "Clear speedups across 7B-70B models." in forum_out
+
+
+

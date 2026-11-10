@@ -554,6 +554,63 @@ def _resolve_paper_content(
                         "resolution_tier": "tier1_arxiv_pdf",
                     }
 
+    # --- Tier 1b: Direct OpenReview Forum ID or URL ---
+    try:
+        from src.openreview_client import (
+            extract_openreview_forum_id,
+            get_openreview_forum_details,
+            is_openreview_configured,
+            search_openreview_notes,
+        )
+    except Exception:
+        extract_openreview_forum_id = lambda _: None
+        get_openreview_forum_details = lambda *a, **kw: None
+        is_openreview_configured = lambda: False
+        search_openreview_notes = lambda *a, **kw: []
+
+    or_forum_id = extract_openreview_forum_id(url_or_arxiv_id)
+    if or_forum_id:
+        try:
+            or_meta = get_openreview_forum_details(or_forum_id, include_reviews=False) or {}
+        except Exception:
+            or_meta = {}
+        if or_meta:
+            metadata_pool.append(or_meta)
+            resolved_title = resolved_title or or_meta.get("title")
+
+        safe_or_id = re.sub(r"[^a-zA-Z0-9._-]", "_", or_forum_id)
+        online_cache_dir = settings.CACHE_DIR / "online_docs"
+        cached_or_md = online_cache_dir / f"openreview_{safe_or_id}.md"
+        cached_or_pdf = online_cache_dir / f"openreview_{safe_or_id}.pdf"
+        if cached_or_md.exists() and cached_or_pdf.exists():
+            cached_text = cached_or_md.read_text(encoding="utf-8")
+            if cached_text.strip():
+                staged_pdf.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(cached_or_pdf, staged_pdf)
+                return {
+                    "title": _derive_name(url_or_arxiv_id, resolved_title or f"OpenReview_{or_forum_id}"),
+                    "doi": resolved_doi,
+                    "text": cached_text,
+                    "pdf_path": str(staged_pdf),
+                    "page_count": None,
+                    "resolution_tier": "tier1_openreview_pdf",
+                }
+
+        or_pdf_url = or_meta.get("pdf_url") or f"https://openreview.net/pdf?id={or_forum_id}"
+        if _download_pdf_bytes(or_pdf_url, staged_pdf):
+            extracted_md, page_count = _extract_pdf_file(
+                staged_pdf, tracker=tracker, label=resolved_title or f"OpenReview:{or_forum_id}"
+            )
+            if extracted_md:
+                return {
+                    "title": _derive_name(url_or_arxiv_id, resolved_title or f"OpenReview_{or_forum_id}"),
+                    "doi": resolved_doi,
+                    "text": extracted_md,
+                    "pdf_path": str(staged_pdf),
+                    "page_count": page_count,
+                    "resolution_tier": "tier1_openreview_pdf",
+                }
+
     # --- Tier 3 pre-check / HTML meta extraction if an HTTP URL was given ---
     url_info = _inspect_url_directly(url_or_arxiv_id, staged_pdf)
     if url_info:
@@ -635,6 +692,30 @@ def _resolve_paper_content(
                         "page_count": page_count,
                         "resolution_tier": "tier2_s2_pdf",
                     }
+
+        # 2d. Optional OpenReview lookup (only when user has configured OpenReview credentials)
+        if resolved_title and is_openreview_configured():
+            try:
+                or_candidates = search_openreview_notes(query=resolved_title, limit=3)
+                for cand in or_candidates:
+                    if _titles_match(resolved_title, cand.get("title", "")):
+                        metadata_pool.append(cand)
+                        if cand.get("pdf_url") and _download_pdf_bytes(cand["pdf_url"], staged_pdf):
+                            extracted_md, page_count = _extract_pdf_file(
+                                staged_pdf, tracker=tracker, label=resolved_title or cand.get("title")
+                            )
+                            if extracted_md:
+                                return {
+                                    "title": _derive_name(url_or_arxiv_id, resolved_title or cand.get("title")),
+                                    "doi": resolved_doi,
+                                    "text": extracted_md,
+                                    "pdf_path": str(staged_pdf),
+                                    "page_count": page_count,
+                                    "resolution_tier": "tier2_openreview_pdf",
+                                }
+                        break
+            except Exception as e:
+                logger.debug("Optional OpenReview title lookup failed: %s", e)
 
     # --- Tier 4: Rich Metadata + Abstract + Web Text Fallback ---
     final_title = _derive_name(url_or_arxiv_id, resolved_title)

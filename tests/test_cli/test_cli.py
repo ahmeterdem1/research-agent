@@ -329,6 +329,61 @@ def test_cli_rm_and_index_dry_run(monkeypatch, tmp_path, capsys):
     assert "This is extracted in milliseconds with PyMuPDF." in md_content
 
 
+def test_cli_login_openreview_lifecycle(monkeypatch, tmp_path, capsys):
+    from unittest.mock import MagicMock, patch
+    from src import openreview_client
+
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path / "ra_home")
+    monkeypatch.delenv("OPENREVIEW_TOKEN", raising=False)
+    monkeypatch.delenv("OPENREVIEW_USERNAME", raising=False)
+    monkeypatch.delenv("OPENREVIEW_PASSWORD", raising=False)
+
+    # 1. Status when not configured
+    rc_st1 = cli.main(["login-openreview", "--status"])
+    assert rc_st1 == 0
+    assert "Not configured" in capsys.readouterr().out
+
+    # 2. Login with --username and --password (mocking OpenReview POST /login)
+    with patch("src.openreview_client.requests.post") as mock_post:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "token": "jwt_tok_abc999",
+            "user": {"id": "~Alice_Researcher1"},
+        }
+        mock_post.return_value = mock_resp
+
+        rc_login = cli.main(
+            [
+                "login-openreview",
+                "--username",
+                "alice@university.edu",
+                "--password",
+                "secret-pass-123",
+            ]
+        )
+        assert rc_login == 0
+        out_login = capsys.readouterr().out
+        assert "Successfully authenticated with OpenReview as '~Alice_Researcher1'!" in out_login
+
+    auth_file = (tmp_path / "ra_home") / "openreview_auth.json"
+    assert auth_file.exists()
+    assert openreview_client.is_openreview_configured() is True
+
+    # 3. Status after login
+    rc_st2 = cli.main(["login-openreview", "--status"])
+    assert rc_st2 == 0
+    out_st2 = capsys.readouterr().out
+    assert "Authenticated as ~Alice_Researcher1" in out_st2
+
+    # 4. Logout removes credentials file
+    rc_logout = cli.main(["login-openreview", "--logout"])
+    assert rc_logout == 0
+    assert not auth_file.exists()
+    assert openreview_client.is_openreview_configured() is False
+
+
+
 
 
 

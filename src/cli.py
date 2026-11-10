@@ -294,6 +294,10 @@ def get_status(project_dir: Optional[Path] = None) -> dict:
         else:
             mcp_status[key] = "inherited (global)"
 
+    from src.openreview_client import get_openreview_status
+
+    or_status = get_openreview_status()
+
     return {
         "data_dir": str(settings.DATA_DIR),
         "db_path": str(settings.DB_PATH),
@@ -307,10 +311,17 @@ def get_status(project_dir: Optional[Path] = None) -> dict:
         "kg_global_triplets": kg_global_count,
         "kg_project_triplets": kg_project_count,
         "project_mcp_status": mcp_status,
+        "openreview": or_status,
     }
 
 
 def format_status(status: dict) -> str:
+    or_info = status.get("openreview") or {}
+    if or_info.get("configured"):
+        or_line = f"Authenticated as {or_info.get('user_id')} ({or_info.get('auth_file')})"
+    else:
+        or_line = "Not configured (optional — run 'ra-cli login-openreview')"
+
     lines = [
         "=== Research Agent Status ===",
         f"Global Data Home : {status['data_dir']}",
@@ -321,6 +332,7 @@ def format_status(status: dict) -> str:
         f"({'present' if status['global_vtree_exists'] else 'missing'}, {status['global_vtree_docs']} docs/books)",
         f"Project VTree    : {status['project_vtree_path'] or '.opencode/vtree.json (not present)'} "
         f"({status['project_vtree_docs']} docs/books)",
+        f"OpenReview Auth  : {or_line}",
         "Project MCP Toggles (opencode.json):",
     ]
     for server, state in status["project_mcp_status"].items():
@@ -545,6 +557,54 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Print the full extracted Markdown directly to stdout instead of writing a .md file",
     )
 
+    # 10. login-openreview
+    p_or_login = sub.add_parser(
+        "login-openreview",
+        aliases=["openreview-login"],
+        help="Authenticate with your personal OpenReview account to enable OpenReview search and review tools",
+    )
+    p_or_login.add_argument(
+        "-u",
+        "--username",
+        type=str,
+        default=None,
+        help="OpenReview email or username (prompts interactively if omitted)",
+    )
+    p_or_login.add_argument(
+        "-p",
+        "--password",
+        type=str,
+        default=None,
+        help="OpenReview password (prompts securely with hidden input if omitted)",
+    )
+    p_or_login.add_argument(
+        "--token",
+        type=str,
+        default=None,
+        help="Directly save a pre-issued OpenReview JWT bearer token instead of logging in with username/password",
+    )
+    p_or_login.add_argument(
+        "--api-url",
+        type=str,
+        default="https://api2.openreview.net",
+        help="OpenReview API base URL (default: https://api2.openreview.net)",
+    )
+    p_or_login.add_argument(
+        "--no-save-password",
+        action="store_true",
+        help="Only store the short-lived JWT token in ~/.research-agent/openreview_auth.json (disable auto-refresh)",
+    )
+    p_or_login.add_argument(
+        "--status",
+        action="store_true",
+        help="Show current OpenReview authentication status and exit",
+    )
+    p_or_login.add_argument(
+        "--logout",
+        action="store_true",
+        help="Remove saved OpenReview credentials/token from ~/.research-agent/openreview_auth.json",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command in ("install-opencode", "install"):
@@ -707,7 +767,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(format_telemetry_summary(summary))
         return 0
 
-    if args.command == "upgrade":
+    if args.command in ("upgrade", "update"):
         from src.updater import run_upgrade
 
         res = run_upgrade(
@@ -721,6 +781,74 @@ def main(argv: Optional[list[str]] = None) -> int:
         if not res.upgraded and res.message.startswith("Upgrade failed:"):
             return 1
         return 0
+
+    if args.command in ("login-openreview", "openreview-login"):
+        import getpass
+        from src.openreview_client import (
+            OpenReviewAuthError,
+            clear_openreview_auth,
+            get_openreview_status,
+            login_openreview,
+        )
+
+        if args.logout:
+            removed = clear_openreview_auth()
+            if removed:
+                print("Removed saved OpenReview credentials from ~/.research-agent/openreview_auth.json.")
+            else:
+                print("No saved OpenReview credentials found.")
+            return 0
+
+        if args.status:
+            st = get_openreview_status()
+            if st["configured"]:
+                print(
+                    f"OpenReview Auth: Authenticated as {st['user_id']}\n"
+                    f"  - API URL  : {st['api_url']}\n"
+                    f"  - Auth File: {st['auth_file']}"
+                )
+            else:
+                print("OpenReview Auth: Not configured. Run `ra-cli login-openreview` to log in.")
+            return 0
+
+        username = args.username
+        password = args.password
+        token = args.token
+
+        if not token:
+            if not username:
+                try:
+                    username = input("OpenReview Email or Username: ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    print("\nCancelled.")
+                    return 1
+            if not password:
+                try:
+                    password = getpass.getpass("OpenReview Password: ")
+                except (EOFError, KeyboardInterrupt):
+                    print("\nCancelled.")
+                    return 1
+
+        try:
+            rec = login_openreview(
+                username=username,
+                password=password,
+                token=token,
+                api_url=args.api_url,
+                save_password_for_refresh=not args.no_save_password,
+            )
+            print(
+                f"Successfully authenticated with OpenReview as '{rec['user_id']}'!\n"
+                f"  - Saved to : {settings.DATA_DIR / 'openreview_auth.json'} (mode 0600)\n"
+                f"  - Tools enabled: ra_search.openreview_search, ra_search.get_openreview_paper"
+            )
+            return 0
+        except OpenReviewAuthError as e:
+            logger.error("%s", e)
+            return 1
+        except Exception as e:
+            logger.error("OpenReview login failed: %s", e)
+            return 1
 
     if args.command == "extract":
         import time
