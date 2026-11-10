@@ -584,6 +584,24 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Directly save a pre-issued OpenReview JWT bearer token instead of logging in with username/password",
     )
     p_or_login.add_argument(
+        "--mfa-code",
+        type=str,
+        default=None,
+        help="6-digit OpenReview MFA verification code (prompts interactively if MFA is enabled on your account)",
+    )
+    p_or_login.add_argument(
+        "--mfa-method",
+        choices=["totp", "emailOtp"],
+        default=None,
+        help="Preferred OpenReview MFA method ('totp' authenticator app or 'emailOtp' email code)",
+    )
+    p_or_login.add_argument(
+        "--totp-secret",
+        type=str,
+        default=None,
+        help="Optional base32 TOTP secret so MFA codes can be generated automatically on token refresh",
+    )
+    p_or_login.add_argument(
         "--api-url",
         type=str,
         default="https://api2.openreview.net",
@@ -829,6 +847,25 @@ def main(argv: Optional[list[str]] = None) -> int:
                     print("\nCancelled.")
                     return 1
 
+        def _interactive_mfa_prompt(method: str, available_methods: list[str], trigger_challenge) -> tuple[str, str]:
+            active_m = method
+            if active_m == "emailOtp":
+                print("OpenReview MFA required (emailOtp): A 6-digit verification code has been sent to your email.")
+            elif active_m == "totp":
+                extra = " (or type 'email' to receive a code via email)" if "emailOtp" in available_methods else ""
+                print(f"OpenReview MFA required (totp): Enter the 6-digit code from your authenticator app{extra}.")
+            try:
+                ans = input(f"OpenReview MFA Code ({active_m}): ").strip()
+                if ans.lower() == "email" and "emailOtp" in available_methods and active_m != "emailOtp":
+                    trigger_challenge("emailOtp")
+                    active_m = "emailOtp"
+                    print("A 6-digit verification code has been sent to your email.")
+                    ans = input("OpenReview MFA Code (emailOtp): ").strip()
+                return active_m, ans
+            except (EOFError, KeyboardInterrupt):
+                print("\nCancelled.")
+                return active_m, ""
+
         try:
             rec = login_openreview(
                 username=username,
@@ -836,6 +873,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                 token=token,
                 api_url=args.api_url,
                 save_password_for_refresh=not args.no_save_password,
+                mfa_code=args.mfa_code,
+                mfa_method=args.mfa_method,
+                totp_secret=args.totp_secret,
+                mfa_prompt_callback=_interactive_mfa_prompt,
             )
             print(
                 f"Successfully authenticated with OpenReview as '{rec['user_id']}'!\n"

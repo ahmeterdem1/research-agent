@@ -11,11 +11,16 @@ Key Design Principles:
 """
 
 from datetime import datetime, timezone
+import base64
+import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
 import re
-from typing import Any, Optional
+import struct
+import time
+from typing import Any, Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -115,16 +120,79 @@ def get_openreview_status() -> dict[str, Any]:
     }
 
 
+def _generate_totp(secret: str, interval: int = 30, digits: int = 6) -> str:
+    """Generate a standard RFC 6238 6-digit TOTP code from a base32 secret without external libraries."""
+    cleaned = re.sub(r"[\s\-]", "", secret).upper()
+    padding = (8 - len(cleaned) % 8) % 8
+    key = base64.b32decode(cleaned + ("=" * padding), casefold=True)
+    counter = int(time.time() // interval)
+    msg = struct.pack(">Q", counter)
+    digest = hmac.new(key, msg, hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    code_int = (struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF) % (10**digits)
+    return str(code_int).zfill(digits)
+
+
+def _request_mfa_challenge(base_url: str, mfa_pending_token: str, method: str) -> None:
+    """Trigger an OpenReview MFA challenge (e.g. dispatching an emailOtp code)."""
+    resp = requests.post(
+        f"{base_url}/mfa/challenge",
+        json={"mfaPendingToken": mfa_pending_token, "method": method},
+        headers={"Content-Type": "application/json", "User-Agent": "ResearchAgent/1.0"},
+        timeout=15,
+    )
+    if resp.status_code >= 400:
+        detail = ""
+        try:
+            detail = (resp.json() or {}).get("message") or ""
+        except Exception:
+            detail = resp.text[:200]
+        raise OpenReviewAuthError(
+            f"Failed to request OpenReview MFA challenge ({method}, HTTP {resp.status_code})"
+            + (f": {detail}" if detail else ".")
+        )
+
+
+def _verify_mfa_code(base_url: str, mfa_pending_token: str, method: str, code: str) -> dict[str, Any]:
+    """Verify an OpenReview MFA code via ``POST /mfa/verify`` and return the login JSON payload."""
+    resp = requests.post(
+        f"{base_url}/mfa/verify",
+        json={
+            "mfaPendingToken": mfa_pending_token,
+            "method": method,
+            "code": code.strip(),
+        },
+        headers={"Content-Type": "application/json", "User-Agent": "ResearchAgent/1.0"},
+        timeout=15,
+    )
+    if resp.status_code in (400, 401, 403):
+        detail = ""
+        try:
+            detail = (resp.json() or {}).get("message") or ""
+        except Exception:
+            detail = resp.text[:200]
+        raise OpenReviewAuthError(
+            f"OpenReview MFA verification failed (HTTP {resp.status_code})"
+            + (f": {detail}" if detail else ". Please check the 6-digit verification code.")
+        )
+    resp.raise_for_status()
+    return resp.json() or {}
+
+
 def login_openreview(
     username: Optional[str] = None,
     password: Optional[str] = None,
     token: Optional[str] = None,
     api_url: str = DEFAULT_OPENREVIEW_API_URL,
     save_password_for_refresh: bool = True,
+    mfa_code: Optional[str] = None,
+    mfa_method: Optional[str] = None,
+    totp_secret: Optional[str] = None,
+    mfa_prompt_callback: Optional[Callable[[str, list[str], Callable[[str], None]], str]] = None,
 ) -> dict[str, Any]:
     """
-    Authenticate with OpenReview API (`POST /login`) using the user's own credentials
-    (or validate a user-supplied bearer token via `GET /profiles`) and store the session
+    Authenticate with OpenReview API (`POST /login` + `POST /mfa/verify` when MFA is enabled)
+    using the user's own credentials (or a user-supplied bearer token) and store the session
     in `~/.research-agent/openreview_auth.json`.
     """
     base_url = (api_url or DEFAULT_OPENREVIEW_API_URL).rstrip("/")
@@ -144,9 +212,10 @@ def login_openreview(
     if not username or not password:
         raise OpenReviewAuthError("Both OpenReview username/email and password are required.")
 
+    # Request a 7-day token (604800 seconds, OpenReview's max expiresIn)
     resp = requests.post(
         f"{base_url}/login",
-        json={"id": username.strip(), "password": password},
+        json={"id": username.strip(), "password": password, "expiresIn": 604800},
         headers={"Content-Type": "application/json", "User-Agent": "ResearchAgent/1.0"},
         timeout=15,
     )
@@ -163,12 +232,84 @@ def login_openreview(
     resp.raise_for_status()
 
     payload = resp.json() or {}
-    jwt_token = payload.get("token")
+    active_totp_secret = (totp_secret or os.getenv("OPENREVIEW_TOTP_SECRET") or "").strip()
+
+    # Handle OpenReview Multi-Factor Authentication (MFA: emailOtp / totp)
+    if payload.get("mfaPending") or payload.get("mfaPendingToken"):
+        mfa_pending_token = payload.get("mfaPendingToken")
+        mfa_methods: list[str] = payload.get("mfaMethods") or []
+        preferred_method: Optional[str] = payload.get("preferredMethod")
+
+        if not mfa_pending_token:
+            raise OpenReviewAuthError("OpenReview indicated MFA is required, but did not return mfaPendingToken.")
+
+        # Determine which MFA method to use
+        chosen_method: Optional[str] = None
+        if mfa_method and mfa_method in ("totp", "emailOtp"):
+            chosen_method = mfa_method
+        elif active_totp_secret and ("totp" in mfa_methods or not mfa_methods):
+            chosen_method = "totp"
+        elif preferred_method in ("totp", "emailOtp"):
+            chosen_method = preferred_method
+        elif "totp" in mfa_methods:
+            chosen_method = "totp"
+        elif "emailOtp" in mfa_methods:
+            chosen_method = "emailOtp"
+        else:
+            raise OpenReviewAuthError(
+                f"OpenReview account requires MFA (offered methods: {mfa_methods}), "
+                "but neither 'emailOtp' nor 'totp' is available. Please enable Email OTP or Authenticator App (TOTP) "
+                "in your OpenReview security settings, or log in with `ra-cli login-openreview --token <jwt>`."
+            )
+
+        code_to_verify: Optional[str] = (mfa_code or "").strip() or None
+        if not code_to_verify and chosen_method == "totp" and active_totp_secret:
+            code_to_verify = _generate_totp(active_totp_secret)
+
+        if not code_to_verify:
+            if not mfa_prompt_callback:
+                raise OpenReviewAuthError(
+                    f"OpenReview account has Multi-Factor Authentication ({chosen_method}) enabled. "
+                    "Please run `ra-cli login-openreview` interactively in your terminal to enter the 6-digit MFA code."
+                )
+
+            def _trigger_challenge(m: str) -> None:
+                if m == "emailOtp":
+                    _request_mfa_challenge(base_url, mfa_pending_token, "emailOtp")
+
+            if chosen_method == "emailOtp":
+                _trigger_challenge("emailOtp")
+
+            prompt_res = mfa_prompt_callback(chosen_method, mfa_methods, _trigger_challenge)
+            if isinstance(prompt_res, tuple):
+                chosen_method, code_to_verify = prompt_res
+            else:
+                code_to_verify = prompt_res
+
+        if not code_to_verify or not code_to_verify.strip():
+            raise OpenReviewAuthError("No OpenReview MFA verification code was provided.")
+
+        payload = _verify_mfa_code(base_url, mfa_pending_token, chosen_method, code_to_verify.strip())
+
+    jwt_token = (
+        payload.get("token")
+        or payload.get("accessToken")
+        or resp.cookies.get("openreview.accessToken")
+    )
     if not jwt_token:
-        raise OpenReviewAuthError("OpenReview login response did not include an authentication token.")
+        raise OpenReviewAuthError(
+            f"OpenReview login response did not include an authentication token (response keys: {list(payload.keys())})."
+        )
 
     user_obj = payload.get("user") or {}
-    user_id = user_obj.get("id") or (user_obj.get("user") or {}).get("id") or username.strip()
+    profile_obj = user_obj.get("profile") or {}
+    user_id = (
+        profile_obj.get("preferredId")
+        or profile_obj.get("id")
+        or user_obj.get("id")
+        or (user_obj.get("user") or {}).get("id")
+        or username.strip()
+    )
 
     auth_record: dict[str, Any] = {
         "token": jwt_token,
@@ -179,6 +320,8 @@ def login_openreview(
     }
     if save_password_for_refresh:
         auth_record["password"] = password
+        if active_totp_secret:
+            auth_record["totp_secret"] = active_totp_secret
 
     save_openreview_auth(auth_record)
     logger.info("Authenticated with OpenReview as %s", user_id)
@@ -199,6 +342,7 @@ def get_openreview_headers(force_refresh: bool = False) -> dict[str, str]:
                 password=auth["password"],
                 api_url=auth.get("api_url", DEFAULT_OPENREVIEW_API_URL),
                 save_password_for_refresh=True,
+                totp_secret=auth.get("totp_secret"),
             )
         except Exception as e:
             logger.warning("OpenReview token auto-refresh failed: %s", e)

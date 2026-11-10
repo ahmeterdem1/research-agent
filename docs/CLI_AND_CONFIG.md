@@ -213,11 +213,14 @@ ra-cli extract /path/to/paper.pdf --mode pymupdf --stdout
 ```
 
 ### 3.10 `ra-cli login-openreview`
-Authenticates with your personal OpenReview account (`POST https://api2.openreview.net/login`) and saves the resulting JWT bearer token in `~/.research-agent/openreview_auth.json` (`chmod 0600`) to enable `ra_search.openreview_search` and `ra_search.get_openreview_paper`. No built-in or default credentials exist—OpenReview access is strictly opt-in per user:
+Authenticates with your personal OpenReview account (`POST https://api2.openreview.net/login` and `/mfa/verify` when Multi-Factor Authentication is enabled) and saves a 7-day JWT bearer token in `~/.research-agent/openreview_auth.json` (`chmod 0600`) to enable `ra_search.openreview_search` and `ra_search.get_openreview_paper`. No built-in or default credentials exist—OpenReview access is strictly opt-in per user:
 
 ```bash
-# Interactive login (prompts for email/username and hidden password)
+# Interactive login (prompts for email/username, hidden password, and 6-digit MFA code via emailOtp or TOTP if enabled)
 ra-cli login-openreview
+
+# Optional: pass a base32 TOTP secret so MFA codes can be generated automatically on background token refresh
+ra-cli login-openreview --totp-secret <YOUR_BASE32_TOTP_SECRET>
 
 # Check current OpenReview authentication status
 ra-cli login-openreview --status

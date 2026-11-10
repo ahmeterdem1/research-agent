@@ -382,6 +382,50 @@ def test_cli_login_openreview_lifecycle(monkeypatch, tmp_path, capsys):
     assert not auth_file.exists()
     assert openreview_client.is_openreview_configured() is False
 
+    # 5. Login with MFA enabled (`mfaPending: True` -> `/mfa/challenge` -> interactive OTP prompt -> `/mfa/verify`)
+    post_calls = []
+
+    def _mock_mfa_post(url, json=None, headers=None, timeout=15):
+        post_calls.append((url, json))
+        resp = MagicMock()
+        resp.status_code = 200
+        if url.endswith("/login"):
+            resp.json.return_value = {
+                "mfaPending": True,
+                "mfaPendingToken": "mfa_pending_tok_777",
+                "mfaMethods": ["emailOtp", "totp"],
+                "preferredMethod": "emailOtp",
+            }
+        elif url.endswith("/mfa/challenge"):
+            resp.json.return_value = {"status": "sent"}
+        elif url.endswith("/mfa/verify"):
+            assert json["mfaPendingToken"] == "mfa_pending_tok_777"
+            assert json["method"] == "emailOtp"
+            assert json["code"] == "654321"
+            resp.json.return_value = {
+                "token": "jwt_mfa_verified_999",
+                "user": {"id": "alice@university.edu", "profile": {"preferredId": "~Alice_MFA1"}},
+            }
+        return resp
+
+    monkeypatch.setattr("builtins.input", lambda prompt="": "654321")
+    with patch("src.openreview_client.requests.post", side_effect=_mock_mfa_post):
+        rc_mfa = cli.main(
+            [
+                "login-openreview",
+                "--username",
+                "alice@university.edu",
+                "--password",
+                "secret-pass-123",
+            ]
+        )
+        assert rc_mfa == 0
+        out_mfa = capsys.readouterr().out
+        assert "OpenReview MFA required (emailOtp)" in out_mfa
+        assert "Successfully authenticated with OpenReview as '~Alice_MFA1'!" in out_mfa
+        assert [u.split("/")[-1] for u, _ in post_calls] == ["login", "challenge", "verify"]
+
+
 
 
 
