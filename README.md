@@ -42,17 +42,23 @@ Installed once system-wide on your PC, it equips OpenCode with:
 ## Quick Start
 
 ### 1. Install Globally with `uv`
-Install the package system-wide so all CLI and MCP binaries (`ra-cli`, `ra-mcp-docs`, `ra-mcp-search`, `ra-mcp-ingest`, `ra-mcp-kg`) are available on your `$PATH`:
+Install the package system-wide so all CLI and MCP binaries (`ra-cli`, `ra-mcp-docs`, `ra-mcp-search`, `ra-mcp-ingest`, `ra-mcp-kg`) are available on your `$PATH`. By default, `research-agent` installs only lightweight core dependencies (~35 MB) using the fast local `pymupdf` extractor (and optional OpenRouter Vision `llm` OCR):
 
 ```bash
-# Standalone system-wide installation from GitHub (recommended for general use)
+# Default lightweight installation from GitHub (~35 MB, PyMuPDF + optional LLM OCR)
 uv tool install git+https://github.com/ahmeterdem1/research-agent.git
 
-# Or editable installation from a local development checkout
-uv tool install -e .
+# Optional: include local neural Docling OCR dependencies (docling, torch, torchvision, ~3.5 GB)
+uv tool install "research-agent[docling] @ git+https://github.com/ahmeterdem1/research-agent.git"
 
-# Upgrade your system-wide installation anytime from GitHub (leaves local dev checkouts untouched)
+# Or editable installation from a local development checkout (core only, or with [docling])
+uv tool install -e .
+uv tool install -e ".[docling]"
+
+# Upgrade your system-wide installation anytime from GitHub (preserves [docling] if installed)
 ra-cli upgrade
+ra-cli upgrade --with-docling       # Add optional [docling] support during upgrade
+ra-cli upgrade --without-docling    # Downgrade to core lightweight dependencies only
 ```
 
 ### 2. Configure Your Global API Key

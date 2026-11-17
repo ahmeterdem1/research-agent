@@ -49,7 +49,7 @@ Implemented in [config/settings.py](file:///Users/ahmeterdem/Desktop/code/resear
 | `RA_VTREE_PATH` | `<cwd>/.opencode/vtree.json` | Override path for the Project-Local VTree JSON file. |
 | `DEFAULT_AGENT_MODEL` | `openrouter/deepseek/deepseek-chat` | Default model for agentic loops. |
 | `DEFAULT_SUMMARIZATION_MODEL` | `openrouter/deepseek/deepseek-chat` | Model used for document/directory summarization and VTree organization. |
-| `EXTRACTOR_MODE` | `pymupdf` | PDF extraction backend: `pymupdf` (default — instant, zero-cost local structured Markdown extraction via PyMuPDF `fitz`), `docling` (local IBM Docling layout OCR), or `llm` (Vision LLM OCR via OpenRouter using the **Dr. DocBench** extraction prompt in [`config/prompts.toml`](file:///Users/ahmeterdem/Desktop/code/research%20agent/config/prompts.toml#L40-L116)). |
+| `EXTRACTOR_MODE` | `pymupdf` | PDF extraction backend: `pymupdf` (default — instant, zero-cost local structured Markdown extraction via PyMuPDF `fitz`), `docling` (optional local IBM Docling layout OCR — install with `"research-agent[docling] @ git+https://github.com/ahmeterdem1/research-agent.git"` or `ra-cli upgrade --with-docling`; automatically falls back to `pymupdf` if not installed), or `llm` (Vision LLM OCR via OpenRouter using the **Dr. DocBench** extraction prompt in [`config/prompts.toml`](file:///Users/ahmeterdem/Desktop/code/research%20agent/config/prompts.toml#L40-L116)). |
 | `VISION_MODEL` | `openrouter/google/gemini-2.5-flash` | Vision model used when `EXTRACTOR_MODE=llm`. |
 | `DOCLING_DEVICE` | `auto` | Hardware accelerator for Docling (`auto`, `mps`, `cuda`, `cpu`). |
 | `MAX_CONCURRENT_REQUESTS` | `5` | Thread-pool concurrency for cold-start extraction and summarization. |
@@ -181,14 +181,18 @@ ra-cli stats --reset --all-projects
 > Use `opencode stats --models --tools` to inspect LLM token consumption and dollar costs across models, and use `ra-cli stats` to inspect MCP tool latencies, soft error messages, `global` vs. `project` scope usage, and behavioral compliance.
 
 ### 3.8 `ra-cli upgrade`
-Checks the source GitHub repository (`https://github.com/ahmeterdem1/research-agent`, supporting private repositories via `gh` CLI, `GITHUB_TOKEN`, or SSH/HTTPS `git ls-remote`) and upgrades your **system-wide installation** (`uv tool` or Homebrew) if the remote version or commit differs from your installed version—**without touching any local development checkout**:
+Checks the source GitHub repository (`https://github.com/ahmeterdem1/research-agent`, supporting private repositories via `gh` CLI, `GITHUB_TOKEN`, or SSH/HTTPS `git ls-remote`) and upgrades your **system-wide installation** (`uv tool` or Homebrew) if the remote version or commit differs from your installed version—**without touching any local development checkout**. If you previously installed optional `[docling]` dependencies, `ra-cli upgrade` preserves them automatically:
 
 ```bash
 # Check if an upgrade is available on GitHub without installing
 ra-cli upgrade --check
 
-# Upgrade the system-wide installation if a newer version/commit is on GitHub
+# Upgrade the system-wide installation (preserves core-only or [docling] automatically)
 ra-cli upgrade
+
+# Opt in or out of optional [docling] dependencies during an upgrade
+ra-cli upgrade --with-docling
+ra-cli upgrade --without-docling
 
 # Force reinstall from a specific branch or tag (or via Homebrew when published)
 ra-cli upgrade --ref main --force

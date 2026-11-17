@@ -241,6 +241,26 @@ def test_cli_upgrade_checks_version_and_upgrades_via_uv_or_homebrew(monkeypatch,
     assert "Successfully upgraded system-wide installation (homebrew)" in out3
     assert brew_calls == ["research-agent"]
 
+    # 4. Verify _run_uv_global_install builds core vs `[docling]` GitHub targets accurately
+    monkeypatch.undo()
+    uv_subproc_cmds = []
+
+    class _FakeSubprocRes:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(
+        updater.subprocess,
+        "run",
+        lambda cmd, **kwargs: uv_subproc_cmds.append(cmd) or _FakeSubprocRes(),
+    )
+    ok_core, _ = updater._run_uv_global_install("ahmeterdem1/research-agent", "HEAD", with_docling=False)
+    ok_docling, _ = updater._run_uv_global_install("ahmeterdem1/research-agent", "HEAD", with_docling=True)
+    assert ok_core and ok_docling
+    assert uv_subproc_cmds[0][-1] == "git+https://github.com/ahmeterdem1/research-agent.git"
+    assert uv_subproc_cmds[1][-1] == "research-agent[docling] @ git+https://github.com/ahmeterdem1/research-agent.git"
+
 
 def test_cli_rm_and_index_dry_run(monkeypatch, tmp_path, capsys):
     from src.cold_start import refresher

@@ -268,15 +268,28 @@ def is_upgrade_needed(
     return False, f"Already up to date (version {local_version})."
 
 
-def _run_uv_global_install(repo: str, ref: str) -> tuple[bool, str]:
+def _run_uv_global_install(
+    repo: str,
+    ref: str,
+    with_docling: Optional[bool] = None,
+) -> tuple[bool, str]:
     """
     Install the package globally via `uv tool install --force --reinstall` directly from GitHub.
+    Preserves optional `[docling]` dependencies when already installed (unless overridden).
     Never modifies any local development directory.
     """
+    if with_docling is not None:
+        include_docling = bool(with_docling)
+    else:
+        from src.cold_start.extractor import is_docling_available
+
+        include_docling = is_docling_available()
+
     ref_suffix = f"@{ref}" if ref and ref != "HEAD" else ""
+    pkg_prefix = "research-agent[docling] @ " if include_docling else ""
     candidates = [
-        f"git+https://github.com/{repo}.git{ref_suffix}",
-        f"git+ssh://git@github.com/{repo}.git{ref_suffix}",
+        f"{pkg_prefix}git+https://github.com/{repo}.git{ref_suffix}",
+        f"{pkg_prefix}git+ssh://git@github.com/{repo}.git{ref_suffix}",
     ]
     last_err = ""
     for git_target in candidates:
@@ -323,16 +336,20 @@ def run_upgrade(
     method: Optional[str] = None,
     check_only: bool = False,
     force: bool = False,
+    with_docling: Optional[bool] = None,
 ) -> UpgradeResult:
     """
     Check the remote GitHub repository (`ahmeterdem1/research-agent`) and upgrade the
     system-wide installation (`uv tool` or `homebrew`) if a newer version/commit exists.
     Never modifies the local coding workspace.
     """
+    from src.cold_start.extractor import is_docling_available
+
     install_method = detect_install_method(method)
     local_ver = get_local_version()
     receipt = load_install_receipt()
     local_sha = receipt.get("sha")
+    currently_has_docling = is_docling_available()
 
     remote_info = fetch_remote_release_info(repo=repo, ref=ref)
     remote_ver = remote_info.get("version")
@@ -345,6 +362,10 @@ def run_upgrade(
         remote_sha=remote_sha,
         force=force,
     )
+
+    if with_docling is not None and bool(with_docling) != currently_has_docling and not needs_up:
+        needs_up = True
+        reason = "Switching optional [docling] dependencies."
 
     if check_only:
         status_msg = f"Upgrade available: {reason}" if needs_up else reason
@@ -371,8 +392,10 @@ def run_upgrade(
 
     if install_method == "homebrew":
         ok, msg = _run_homebrew_upgrade()
+    elif with_docling is None:
+        ok, msg = _run_uv_global_install(repo, ref)
     else:
-        ok, msg = _run_uv_global_install(repo=repo, ref=ref)
+        ok, msg = _run_uv_global_install(repo, ref, with_docling=with_docling)
 
     if not ok:
         return UpgradeResult(
@@ -391,6 +414,7 @@ def run_upgrade(
             "sha": remote_sha,
             "repo": repo,
             "method": install_method,
+            "with_docling": bool(with_docling) if with_docling is not None else currently_has_docling,
             "upgraded_at": datetime.now(timezone.utc).isoformat(),
         }
     )

@@ -527,6 +527,19 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help="Reinstall from GitHub even if local and remote versions match",
     )
+    docling_group = p_upgrade.add_mutually_exclusive_group()
+    docling_group.add_argument(
+        "--with-docling",
+        action="store_true",
+        default=False,
+        help="Include optional [docling] neural PDF extraction dependencies (docling, torch, torchvision) during upgrade",
+    )
+    docling_group.add_argument(
+        "--without-docling",
+        action="store_true",
+        default=False,
+        help="Install only core lightweight dependencies during upgrade (omit optional [docling] extra)",
+    )
 
     # 9. extract
     p_extract = sub.add_parser(
@@ -788,12 +801,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.command in ("upgrade", "update"):
         from src.updater import run_upgrade
 
+        with_docling_opt = True if args.with_docling else (False if args.without_docling else None)
         res = run_upgrade(
             repo=args.repo,
             ref=args.ref,
             method=args.method,
             check_only=args.check,
             force=args.force,
+            with_docling=with_docling_opt,
         )
         print(res.message)
         if not res.upgraded and res.message.startswith("Upgrade failed:"):
