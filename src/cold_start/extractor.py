@@ -1,9 +1,9 @@
 from pathlib import Path
 from collections import Counter
 from dataclasses import dataclass
+import importlib.util
 import re
 import chardet
-from docx import Document as DocxDocument
 from litellm import completion
 import litellm.exceptions as litellm_exc
 from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
@@ -15,6 +15,14 @@ from config import settings
 from config.settings import get_logger
 
 logger = get_logger(__name__)
+
+
+def is_docling_available() -> bool:
+    """Return True if the optional `docling` package is installed in the current environment."""
+    try:
+        return importlib.util.find_spec("docling") is not None
+    except Exception:
+        return False
 
 @dataclass
 class ExtractedContent:
@@ -243,15 +251,24 @@ def extract_pdf_pymupdf(file_path: Path, allow_ocr_fallback: bool = True) -> Ext
     # If the PDF has almost no embedded text (< 40 chars/page), it's likely a scanned image PDF
     avg_chars_per_page = total_chars / max(1, len(pages_dict))
     if allow_ocr_fallback and len(pages_dict) > 0 and avg_chars_per_page < 40 and total_chars < 200:
-        logger.warning(
-            "[PyMuPDF] '%s' appears to be a scanned image PDF (avg %.1f chars/page); falling back to Docling OCR.",
-            file_path.name,
-            avg_chars_per_page,
-        )
-        try:
-            return extract_pdf_docling(file_path)
-        except Exception as e:
-            logger.warning("[PyMuPDF] Docling fallback failed for '%s': %s", file_path.name, e)
+        if is_docling_available():
+            logger.warning(
+                "[PyMuPDF] '%s' appears to be a scanned image PDF (avg %.1f chars/page); falling back to Docling OCR.",
+                file_path.name,
+                avg_chars_per_page,
+            )
+            try:
+                return extract_pdf_docling(file_path)
+            except Exception as e:
+                logger.warning("[PyMuPDF] Docling fallback failed for '%s': %s", file_path.name, e)
+        else:
+            logger.warning(
+                "[PyMuPDF] '%s' appears to be a scanned image PDF (avg %.1f chars/page). "
+                "Optional 'docling' package is not installed; returning embedded text only "
+                "(set EXTRACTOR_MODE=llm or install research-agent[docling] for OCR).",
+                file_path.name,
+                avg_chars_per_page,
+            )
 
     report_mcp_progress(
         max(1, len(pages_dict)),
@@ -298,15 +315,34 @@ def get_converter():
 def extract_pdf_docling(file_path: Path) -> ExtractedContent:
     from src.mcp_servers.progress import report_mcp_progress
 
+    if not is_docling_available():
+        logger.warning(
+            "[Docling] Optional 'docling' package is not installed "
+            "(install with 'uv pip install \"research-agent[docling]\"'). "
+            "Falling back to native PyMuPDF extractor for '%s'.",
+            file_path.name,
+        )
+        return extract_pdf_pymupdf(file_path, allow_ocr_fallback=False)
+
     report_mcp_progress(0, 1, f"[Docling] Converting '{file_path.name}' to Markdown...")
-    converter = get_converter()
-    result = converter.convert(file_path)
+    try:
+        converter = get_converter()
+        result = converter.convert(file_path)
+    except ImportError as e:
+        logger.warning(
+            "[Docling] Optional 'docling' dependencies unavailable (%s). "
+            "Falling back to native PyMuPDF extractor for '%s'.",
+            e,
+            file_path.name,
+        )
+        return extract_pdf_pymupdf(file_path, allow_ocr_fallback=False)
+
     doc = result.document
-    
+
     text = doc.export_to_markdown()
     headings = [line.strip('# ').strip() for line in text.split('\n') if line.startswith('#')]
     report_mcp_progress(1, 1, f"[Docling] Extracted {len(text):,} chars from '{file_path.name}'")
-    
+
     return ExtractedContent(text=text, headings=headings)
 
 import concurrent.futures
@@ -436,6 +472,13 @@ def extract_text(file_path: Path) -> ExtractedContent:
     return ExtractedContent(text=text, headings=headings)
 
 def extract_docx(file_path: Path) -> ExtractedContent:
+    try:
+        from docx import Document as DocxDocument
+    except ImportError as e:
+        raise ImportError(
+            "Optional 'python-docx' package is required to extract .docx files."
+        ) from e
+
     doc = DocxDocument(file_path)
     text = "\n".join(para.text for para in doc.paragraphs)
     headings = [para.text for para in doc.paragraphs if para.style.name.startswith('Heading')]

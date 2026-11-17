@@ -264,7 +264,13 @@ def _build_preflight_report(
     if extractor_mode == "llm":
         parser_desc = f"LLM Vision OCR ({vision_model})"
     elif extractor_mode == "docling":
-        parser_desc = "Local Docling (free)"
+        from src.cold_start.extractor import is_docling_available
+
+        parser_desc = (
+            "Local Docling (free)"
+            if is_docling_available()
+            else "Local PyMuPDF Fast Markdown ($0 cost; 'docling' not installed, auto-fallback)"
+        )
     else:
         parser_desc = "Local PyMuPDF Fast Markdown ($0 cost)"
 

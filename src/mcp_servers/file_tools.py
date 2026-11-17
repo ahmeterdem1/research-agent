@@ -171,7 +171,9 @@ def _extract_pdf_file(
     if mode == "llm":
         mode_label = "Vision LLM OCR"
     elif mode == "docling":
-        mode_label = "Docling"
+        from src.cold_start.extractor import is_docling_available
+
+        mode_label = "Docling" if is_docling_available() else "PyMuPDF ($0 fast; docling not installed)"
     else:
         mode_label = "PyMuPDF ($0 fast)"
     doc_label = label or pdf_path.name

@@ -728,6 +728,59 @@ def test_extract_pdf_pymupdf_structured_markdown_and_default_mode(monkeypatch, t
     assert "1.1 Convergence Metrics" in res.headings
 
 
+def test_extract_pdf_docling_graceful_fallback_when_docling_uninstalled(monkeypatch, tmp_path):
+    """
+    Verify that when optional neural dependencies (`docling`, `torch`, etc.) are not installed,
+    even explicit `EXTRACTOR_MODE=docling` and preflight/progress reporting work cleanly by
+    falling back to native PyMuPDF extraction without raising ImportError/ModuleNotFoundError.
+    """
+    import fitz
+    from config import settings
+    from src.cold_start import extractor
+
+    pdf_path = tmp_path / "fallback_paper.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    page.insert_text((72, 80), "Optional Dependencies Resilience", fontsize=16, fontname="helv")
+    page.insert_text((72, 130), "1 Overview", fontsize=12, fontname="hebo")
+    page.insert_text(
+        (72, 160),
+        "Research Agent runs cleanly without docling or torch installed.",
+        fontsize=10,
+        fontname="helv",
+    )
+    doc.save(str(pdf_path))
+    doc.close()
+
+    monkeypatch.setattr(settings, "EXTRACTOR_MODE", "docling")
+    monkeypatch.setattr(settings, "reload_env_settings", lambda: None)
+    monkeypatch.setattr(extractor, "is_docling_available", lambda: False)
+
+    def _raise_missing():
+        raise ModuleNotFoundError("No module named 'docling'")
+
+    monkeypatch.setattr(extractor, "get_converter", _raise_missing)
+
+    res = extractor.extract_content(pdf_path)
+    assert res is not None
+    assert "# Optional Dependencies Resilience" in res.text
+    assert "## 1 Overview" in res.text
+    assert "Research Agent runs cleanly without docling or torch installed." in res.text
+
+    # Also simulate partial install where is_docling_available() is True but get_converter() raises ImportError
+    monkeypatch.setattr(extractor, "is_docling_available", lambda: True)
+    res_partial = extractor.extract_content(pdf_path)
+    assert res_partial is not None
+    assert "Research Agent runs cleanly without docling or torch installed." in res_partial.text
+
+    # Verify _extract_pdf_file also succeeds gracefully under EXTRACTOR_MODE=docling without docling
+    monkeypatch.setattr(extractor, "is_docling_available", lambda: False)
+    text_out, pg_count = file_tools._extract_pdf_file(pdf_path, label="fallback_paper.pdf")
+    assert pg_count == 1
+    assert text_out is not None
+    assert "Research Agent runs cleanly without docling or torch installed." in text_out
+
+
 
 
 

@@ -1,6 +1,6 @@
 [project]
 name = "research-agent"
-version = "0.1.5"
+version = "0.1.6"
 description = "An extension to opencode for a dedicated research agent and related mcp tools"
 readme = "README.md"
 authors = [
@@ -9,8 +9,8 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "aiosqlite>=0.22.1",
+    "beautifulsoup4>=4.15.0",
     "chardet>=7.6.0",
-    "docling>=2.129.0",
     "duckduckgo-search>=8.1.1",
     "fastapi>=0.141.1",
     "fastmcp>=4.0.5",
@@ -19,16 +19,28 @@ dependencies = [
     "pyalex>=0.21",
     "pydantic>=2.13.5",
     "pymupdf>=1.28.2",
-    "pytest>=9.1.1",
     "python-docx>=1.2.0",
     "python-dotenv>=1.2.3",
+    "requests>=2.32.0",
     "semanticscholar>=0.12.0",
     "tenacity>=9.0.0",
     "uvicorn>=0.53.0",
+]
+
+[project.optional-dependencies]
+docling = [
+    "docling>=2.129.0",
     "onnxruntime-gpu>=1.19.0 ; sys_platform == 'win32' or sys_platform == 'linux'",
     "torch>=2.5.1",
     "torchvision>=0.20.1",
-    "beautifulsoup4>=4.15.0",
+]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
 ]
 
 [project.scripts]
