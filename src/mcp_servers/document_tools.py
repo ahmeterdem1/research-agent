@@ -25,8 +25,11 @@ logger = get_logger(__name__)
 mcp = FastMCP("DocumentTools")
 
 
+_MANAGER_CACHE: dict[str, tuple[int, VTreeManager]] = {}
+
+
 def get_manager(scope: str = "global") -> VTreeManager:
-    """Load the VTreeManager for either 'global' or 'project' scope."""
+    """Load the VTreeManager for either 'global' or 'project' scope, reusing cached instance when unchanged."""
     if scope == "project":
         vtree_path = settings.get_project_vtree_path(must_exist=True)
         if not vtree_path:
@@ -37,9 +40,22 @@ def get_manager(scope: str = "global") -> VTreeManager:
     else:
         vtree_path = settings.get_global_vtree_path()
 
-    store = VTreeStore(vtree_path)
+    vpath = Path(vtree_path)
+    if not vpath.exists():
+        raise FileNotFoundError(f"VTree file not found at {vpath}")
+
+    resolved_key = str(vpath.resolve())
+    raw_bytes = vpath.read_bytes()
+    content_hash = hash(raw_bytes)
+    cached = _MANAGER_CACHE.get(resolved_key)
+    if cached is not None and cached[0] == content_hash:
+        return cached[1]
+
+    store = VTreeStore(vpath)
     vtree_dict = store.load_as_dict()
-    return VTreeManager(vtree_dict)
+    mgr = VTreeManager(vtree_dict)
+    _MANAGER_CACHE[resolved_key] = (content_hash, mgr)
+    return mgr
 
 
 def _iter_managers(scope: str) -> list[tuple[str, VTreeManager]]:

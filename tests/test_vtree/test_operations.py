@@ -192,4 +192,93 @@ def test_search_library_lucene_tokenized_and_stem_matching():
     assert hits_phrase[0]["name"] == "Position The Platonic Representation Hypothesis"
 
 
+def test_search_library_tantivy_stemming_and_bm25_ranking():
+    """
+    Verify that `search_library` uses Tantivy's `en_stem` analyzer and multi-field BM25
+    scoring to match morphological variants (`converging` <-> `convergence`,
+    `transformers` <-> `transformer`) and rank exact multi-field matches above partial mentions.
+    """
+    vtree = {
+        "root": {
+            "type": "directory",
+            "name": "root",
+            "virtual_path": "/",
+            "children": [
+                {
+                    "type": "document",
+                    "name": "Generic Optimization Notes",
+                    "virtual_path": "/Generic Optimization Notes",
+                    "summary": "Notes on optimization algorithms with brief mention of convergence.",
+                },
+                {
+                    "type": "document",
+                    "name": "Neural Scaling Laws and Transformer Representations",
+                    "virtual_path": "/Neural Scaling Laws and Transformer Representations",
+                    "summary": "Analyzes why representations are converging across transformer families.",
+                },
+            ],
+        }
+    }
+    manager = VTreeManager(vtree)
+    hits = manager.search_library("transformers representations convergence")
+    assert len(hits) >= 1
+    assert hits[0]["name"] == "Neural Scaling Laws and Transformer Representations"
+    assert "Generic Optimization Notes" not in [h["name"] for h in hits]
+
+
+def test_searchable_nodes_cache_and_atomic_revision_invalidation(monkeypatch, sample_vtree):
+    """
+    Verify that `VTreeManager.search_library` caches `_collect_searchable_nodes` and the
+    Tantivy index across repeated searches, and atomically invalidates them when any
+    VTree-mutating method bumps `revision` / `last_updated`.
+    """
+    from src.vtree import operations
+
+    collect_calls = 0
+    orig_collect = operations._collect_searchable_nodes
+
+    def _counting_collect(root):
+        nonlocal collect_calls
+        collect_calls += 1
+        return orig_collect(root)
+
+    monkeypatch.setattr(operations, "_collect_searchable_nodes", _counting_collect)
+
+    manager = VTreeManager(sample_vtree)
+    assert collect_calls == 0
+
+    # 1. Two consecutive searches without mutation only walk the tree once
+    hits1 = manager.search_library("attention")
+    hits2 = manager.search_library("transformers")
+    assert len(hits1) == 1 and len(hits2) == 1
+    assert collect_calls == 1
+
+    # 2. Mutating the tree atomically bumps revision & last_updated, invalidating the cache
+    manager.mkdir("/physics")
+    rev_after_mkdir = sample_vtree["revision"]
+    ts_after_mkdir = sample_vtree["last_updated"]
+    assert rev_after_mkdir >= 1
+    assert isinstance(ts_after_mkdir, str) and len(ts_after_mkdir) > 0
+
+    hits3 = manager.search_library("attention")
+    assert len(hits3) == 1
+    assert collect_calls == 2
+
+    # 3. Repeated search after invalidation hits the new cache without re-walking
+    hits4 = manager.search_library("attention")
+    assert len(hits4) == 1
+    assert collect_calls == 2
+
+    # 4. Subsequent mutation (`rm` / `add_document`) further bumps revision and refreshes once
+    manager.add_document(
+        "/physics",
+        {"name": "quantum.pdf", "real_path": "/tmp/q.pdf", "summary": "Quantum optics fundamentals."},
+    )
+    assert sample_vtree["revision"] > rev_after_mkdir
+    hits5 = manager.search_library("quantum")
+    assert len(hits5) == 1 and hits5[0]["name"] == "quantum.pdf"
+    assert collect_calls == 3
+
+
+
 

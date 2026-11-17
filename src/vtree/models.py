@@ -48,6 +48,8 @@ class VTree(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     version: int = 1
+    revision: int = 0
+    last_updated: Optional[str] = None
     library_root: str
     root: VDirectory
 
