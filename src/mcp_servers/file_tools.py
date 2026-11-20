@@ -36,7 +36,7 @@ from src.cold_start.summarizer import summarize_text
 from src.mcp_servers.progress import StepTracker, report_mcp_progress
 from src.telemetry.store import track_tool
 from src.vtree.operations import VTreeManager
-from src.vtree.store import VTreeStore
+from src.vtree.store import VTreeStore, atomic_write_text
 
 logger = get_logger(__name__)
 
@@ -73,7 +73,7 @@ def _staged_pdf_file(temp_id: str) -> Path:
 def _save_staged_manifest(temp_id: str, manifest: dict) -> None:
     _STAGED_PAPERS[temp_id] = manifest
     try:
-        _staged_file(temp_id).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        atomic_write_text(_staged_file(temp_id), json.dumps(manifest, indent=2), encoding="utf-8")
     except OSError as e:
         logger.warning("Could not persist staged manifest %s to disk: %s", temp_id, e)
 
@@ -829,7 +829,7 @@ def stage_paper(
     text_dir = settings.CACHE_DIR / "texts"
     text_dir.mkdir(parents=True, exist_ok=True)
     text_path = text_dir / f"{text_hash}.md"
-    text_path.write_text(text_content, encoding="utf-8")
+    atomic_write_text(text_path, text_content, encoding="utf-8")
     text_path_str = str(text_path)
 
     sum_model = settings.normalize_litellm_model(
@@ -935,60 +935,61 @@ def _persist_to_vtree(paper_info: dict, tracker: Optional[StepTracker] = None) -
         return None
 
     store = VTreeStore(vtree_path)
-    if vtree_path.exists():
-        try:
-            vtree_dict = store.load_as_dict()
-        except Exception as e:
-            logger.warning("Could not load existing VTree at %s: %s", vtree_path, e)
-            return None
-    else:
-        vtree_path.parent.mkdir(parents=True, exist_ok=True)
-        vtree_dict = {
-            "version": 1,
-            "library_root": settings.LIBRARY_ROOT_PATH or str(vtree_path.parent),
-            "root": {
-                "type": "directory",
-                "name": "Root",
-                "virtual_path": "/",
-                "summary": "Root of the research library.",
-                "children": [],
-            },
+    with store.file_lock():
+        if vtree_path.exists():
+            try:
+                vtree_dict = store.load_as_dict()
+            except Exception as e:
+                logger.warning("Could not load existing VTree at %s: %s", vtree_path, e)
+                return None
+        else:
+            vtree_path.parent.mkdir(parents=True, exist_ok=True)
+            vtree_dict = {
+                "version": 1,
+                "library_root": settings.LIBRARY_ROOT_PATH or str(vtree_path.parent),
+                "root": {
+                    "type": "directory",
+                    "name": "Root",
+                    "virtual_path": "/",
+                    "summary": "Root of the research library.",
+                    "children": [],
+                },
+            }
+
+        doc_name = paper_info.get("name") or _derive_name(paper_info["url"])
+        if tracker is not None:
+            tracker.step(f"Moving staged PDF for '{doc_name}' into Downloaded/ folder...")
+        saved_pdf_path = _move_staged_pdf_to_flat_folder(paper_info.get("staged_pdf_path"), doc_name, vtree_dict)
+        real_path = saved_pdf_path or paper_info.get("text_path") or paper_info["url"]
+
+        if tracker is not None:
+            tracker.step(f"Inserting '{doc_name}' into [{scope.upper()}] VTree at '{paper_info['dir']}'...")
+        mgr = VTreeManager(vtree_dict)
+        doc_node = {
+            "type": "document",
+            "name": doc_name,
+            "real_path": real_path,
+            "page_count": paper_info.get("page_count"),
+            "file_type": "pdf" if saved_pdf_path else "md",
+            "doi": paper_info.get("doi"),
+            "file_hash": paper_info.get("text_hash"),
+            "text_hash": paper_info.get("text_hash"),
+            "text_path": paper_info.get("text_path"),
+            "summary": paper_info.get("summary", ""),
         }
+        mgr.add_document(paper_info["dir"], doc_node)
 
-    doc_name = paper_info.get("name") or _derive_name(paper_info["url"])
-    if tracker is not None:
-        tracker.step(f"Moving staged PDF for '{doc_name}' into Downloaded/ folder...")
-    saved_pdf_path = _move_staged_pdf_to_flat_folder(paper_info.get("staged_pdf_path"), doc_name, vtree_dict)
-    real_path = saved_pdf_path or paper_info.get("text_path") or paper_info["url"]
+        # Refresh ancestor directory summaries via OpenRouter (`summarize_directory`)
+        if tracker is not None:
+            tracker.step(f"Updating ancestor directory summaries for '{paper_info['dir']}'...")
+        try:
+            from src.cold_start.refresher import _refresh_dirty_directory_summaries
 
-    if tracker is not None:
-        tracker.step(f"Inserting '{doc_name}' into [{scope.upper()}] VTree at '{paper_info['dir']}'...")
-    mgr = VTreeManager(vtree_dict)
-    doc_node = {
-        "type": "document",
-        "name": doc_name,
-        "real_path": real_path,
-        "page_count": paper_info.get("page_count"),
-        "file_type": "pdf" if saved_pdf_path else "md",
-        "doi": paper_info.get("doi"),
-        "file_hash": paper_info.get("text_hash"),
-        "text_hash": paper_info.get("text_hash"),
-        "text_path": paper_info.get("text_path"),
-        "summary": paper_info.get("summary", ""),
-    }
-    mgr.add_document(paper_info["dir"], doc_node)
+            _refresh_dirty_directory_summaries(vtree_dict["root"])
+        except Exception as e:
+            logger.warning("Could not refresh ancestor directory summaries: %s", e)
 
-    # Refresh ancestor directory summaries via OpenRouter (`summarize_directory`)
-    if tracker is not None:
-        tracker.step(f"Updating ancestor directory summaries for '{paper_info['dir']}'...")
-    try:
-        from src.cold_start.refresher import _refresh_dirty_directory_summaries
-
-        _refresh_dirty_directory_summaries(vtree_dict["root"])
-    except Exception as e:
-        logger.warning("Could not refresh ancestor directory summaries: %s", e)
-
-    store.save_dict(vtree_dict)
+        store.save_dict(vtree_dict)
     return saved_pdf_path
 
 

@@ -1457,6 +1457,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if args.command == "organize":
         from src.cold_start.vtree_organizer import organize_vtree
+        from src.vtree.store import VTreeStore
 
         if args.vtree_path:
             vpath = Path(args.vtree_path).expanduser().resolve()
@@ -1468,11 +1469,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         if not vpath or not vpath.exists():
             logger.error("No VTree found at %s", vpath)
             return 1
-        vtree = json.loads(vpath.read_text(encoding="utf-8"))
-        organized = organize_vtree(vtree, args.max_turns)
-        if organized is not vtree:
-            vpath.write_text(json.dumps(organized, indent=2), encoding="utf-8")
-            print(f"Organized VTree saved to {vpath}")
+        store = VTreeStore(vpath)
+        with store.file_lock():
+            vtree = store.load_as_dict()
+            organized = organize_vtree(vtree, args.max_turns)
+            if organized is not vtree:
+                store.save_dict(organized)
+                print(f"Organized VTree saved to {vpath}")
         return 0
 
     if args.command == "rm":
@@ -1492,15 +1495,16 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 1
 
         store = VTreeStore(vpath)
-        vtree_dict = store.load_as_dict()
-        mgr = VTreeManager(vtree_dict)
-        msg = mgr.rm(args.virtual_path)
-        print(msg)
-        if msg.startswith("Error:"):
-            return 1
-        if not args.no_dir_summaries:
-            _refresh_dirty_directory_summaries(vtree_dict["root"])
-        store.save_dict(vtree_dict)
+        with store.file_lock():
+            vtree_dict = store.load_as_dict()
+            mgr = VTreeManager(vtree_dict)
+            msg = mgr.rm(args.virtual_path)
+            print(msg)
+            if msg.startswith("Error:"):
+                return 1
+            if not args.no_dir_summaries:
+                _refresh_dirty_directory_summaries(vtree_dict["root"])
+            store.save_dict(vtree_dict)
         return 0
 
     if args.command == "status":

@@ -20,8 +20,14 @@ from typing import Iterator
 @contextmanager
 def connect(db_path: str | Path) -> Iterator[sqlite3.Connection]:
     """Yield a connection that commits on success and rolls back on error."""
-    conn = sqlite3.connect(str(db_path), timeout=10)
+    conn = sqlite3.connect(str(db_path), timeout=30.0)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode = WAL")
+    except sqlite3.OperationalError:
+        pass
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn

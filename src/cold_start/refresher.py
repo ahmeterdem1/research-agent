@@ -28,7 +28,7 @@ from src.cold_start.splitter import split_book
 from src.cold_start.summarizer import summarize_book, summarize_directory, summarize_text
 from src.mcp_servers.progress import report_mcp_progress
 from src.vtree.operations import VTreeManager
-from src.vtree.store import VTreeStore
+from src.vtree.store import VTreeStore, atomic_write_text
 
 logger = get_logger(__name__)
 
@@ -88,7 +88,7 @@ def _save_text_to_cache(text: str) -> tuple[str, Path]:
     text_dir.mkdir(parents=True, exist_ok=True)
     text_path = text_dir / f"{text_hash}.md"
     if not text_path.exists():
-        text_path.write_text(text, encoding="utf-8")
+        atomic_write_text(text_path, text, encoding="utf-8")
     return text_hash, text_path
 
 
@@ -615,72 +615,88 @@ def refresh_vtree(
         logger.info("Dry run requested (--dry-run); skipping extraction and LLM calls.")
         return result
 
-    # Step 2: Heal inconsistent nodes (only those with broken/stub summaries)
-    result.repaired_nodes = _repair_nodes_list(inconsistent_nodes, vtree_dict, mgr)
+    with store.file_lock():
+        if target_vtree.exists():
+            vtree_dict = store.load_as_dict()
+            if not vtree_dict.get("library_root"):
+                vtree_dict["library_root"] = str(resolved_lib)
+            mgr = VTreeManager(vtree_dict)
+            relinked_count = _relink_cached_text_paths(vtree_dict.get("root", {}), cache_map)
+            result.relinked_cache_count = relinked_count
+            inconsistent_nodes = _find_inconsistent_doc_nodes(vtree_dict.get("root", {}))
+            indexed_paths = collect_indexed_real_paths(vtree_dict.get("root", {}))
+            unindexed = [
+                f
+                for f in scanned_files
+                if f.real_path not in indexed_paths and _norm_path(f.real_path) not in indexed_paths
+            ]
 
-    # Step 3: Parse & summarize newly dropped files on disk
-    if unindexed:
-        total_new = len(unindexed)
-        report_mcp_progress(
-            0,
-            total_new,
-            f"[Refresh] Parsing & summarizing {total_new} new file(s) ({new_pages} page(s))...",
-        )
-        max_workers = max(1, int(getattr(settings, "MAX_CONCURRENT_REQUESTS", 5)))
-        completed_new = 0
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_finfo = {
-                executor.submit(_process_new_file, finfo, book_threshold): finfo
-                for finfo in unindexed
-            }
-            for future in concurrent.futures.as_completed(future_to_finfo):
-                finfo = future_to_finfo[future]
-                completed_new += 1
-                try:
-                    node_dict = future.result()
-                    if node_dict is None:
+        # Step 2: Heal inconsistent nodes (only those with broken/stub summaries)
+        result.repaired_nodes = _repair_nodes_list(inconsistent_nodes, vtree_dict, mgr)
+
+        # Step 3: Parse & summarize newly dropped files on disk
+        if unindexed:
+            total_new = len(unindexed)
+            report_mcp_progress(
+                0,
+                total_new,
+                f"[Refresh] Parsing & summarizing {total_new} new file(s) ({new_pages} page(s))...",
+            )
+            max_workers = max(1, int(getattr(settings, "MAX_CONCURRENT_REQUESTS", 5)))
+            completed_new = 0
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_finfo = {
+                    executor.submit(_process_new_file, finfo, book_threshold): finfo
+                    for finfo in unindexed
+                }
+                for future in concurrent.futures.as_completed(future_to_finfo):
+                    finfo = future_to_finfo[future]
+                    completed_new += 1
+                    try:
+                        node_dict = future.result()
+                        if node_dict is None:
+                            result.failed_files.append(finfo.real_path)
+                            report_mcp_progress(
+                                completed_new,
+                                total_new,
+                                f"[Index {completed_new}/{total_new}] Skipped/failed '{finfo.name}'",
+                            )
+                            continue
+
+                        vdir = _infer_virtual_dir(finfo.real_path, resolved_lib, target_virtual_dir)
+                        inserted = mgr.add_document(vdir, node_dict)
+                        result.added_nodes.append(inserted)
+                        report_mcp_progress(
+                            completed_new,
+                            total_new,
+                            f"[Index {completed_new}/{total_new}] Indexed '{finfo.name}' -> {inserted.get('virtual_path', vdir)}",
+                        )
+                    except Exception as e:
+                        logger.error("Failed processing new file '%s' during refresh: %s", finfo.real_path, e)
                         result.failed_files.append(finfo.real_path)
                         report_mcp_progress(
                             completed_new,
                             total_new,
-                            f"[Index {completed_new}/{total_new}] Skipped/failed '{finfo.name}'",
+                            f"[Index {completed_new}/{total_new}] Error on '{finfo.name}': {e}",
                         )
-                        continue
 
-                    vdir = _infer_virtual_dir(finfo.real_path, resolved_lib, target_virtual_dir)
-                    inserted = mgr.add_document(vdir, node_dict)
-                    result.added_nodes.append(inserted)
-                    report_mcp_progress(
-                        completed_new,
-                        total_new,
-                        f"[Index {completed_new}/{total_new}] Indexed '{finfo.name}' -> {inserted.get('virtual_path', vdir)}",
-                    )
-                except Exception as e:
-                    logger.error("Failed processing new file '%s' during refresh: %s", finfo.real_path, e)
-                    result.failed_files.append(finfo.real_path)
-                    report_mcp_progress(
-                        completed_new,
-                        total_new,
-                        f"[Index {completed_new}/{total_new}] Error on '{finfo.name}': {e}",
-                    )
+        # Step 4: Refresh dirty directory summaries & persist VTree if anything changed
+        dirty_dirs_after = update_dir_summaries and (_count_dirty_directories(vtree_dict.get("root", {})) > 0)
+        if result.added_nodes or result.repaired_nodes or dirty_dirs_after or relinked_count > 0:
+            if update_dir_summaries:
+                _refresh_dirty_directory_summaries(vtree_dict["root"])
+            if reorganize:
+                from src.cold_start.vtree_organizer import organize_vtree
 
-    # Step 4: Refresh dirty directory summaries & persist VTree if anything changed
-    dirty_dirs_after = update_dir_summaries and (_count_dirty_directories(vtree_dict.get("root", {})) > 0)
-    if result.added_nodes or result.repaired_nodes or dirty_dirs_after or relinked_count > 0:
-        if update_dir_summaries:
-            _refresh_dirty_directory_summaries(vtree_dict["root"])
-        if reorganize:
-            from src.cold_start.vtree_organizer import organize_vtree
-
-            vtree_dict = organize_vtree(vtree_dict)
-        store.save_dict(vtree_dict)
-        logger.info(
-            "Saved refreshed VTree (%s): %d new node(s), %d repaired node(s), %d relinked -> %s",
-            scope,
-            len(result.added_nodes),
-            len(result.repaired_nodes),
-            relinked_count,
-            target_vtree,
-        )
+                vtree_dict = organize_vtree(vtree_dict)
+            store.save_dict(vtree_dict)
+            logger.info(
+                "Saved refreshed VTree (%s): %d new node(s), %d repaired node(s), %d relinked -> %s",
+                scope,
+                len(result.added_nodes),
+                len(result.repaired_nodes),
+                relinked_count,
+                target_vtree,
+            )
 
     return result
