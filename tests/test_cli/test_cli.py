@@ -446,6 +446,104 @@ def test_cli_login_openreview_lifecycle(monkeypatch, tmp_path, capsys):
         assert [u.split("/")[-1] for u, _ in post_calls] == ["login", "challenge", "verify"]
 
 
+def test_install_multi_harness_and_mcp_tool_annotations(monkeypatch, tmp_path, capsys):
+    import asyncio
+
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path / "ra_home")
+
+    oc_dir = tmp_path / "opencode_cfg"
+    gem_dir = tmp_path / "gemini_home" / ".gemini"
+    claude_dir = tmp_path / "claude_home" / ".claude"
+    agy_dir = tmp_path / "agy_cfg"
+    desktop_dir = tmp_path / "claude_desktop"
+    cursor_dir = tmp_path / "cursor_cfg"
+
+    # Pre-seed an existing key in gemini settings.json to verify safe merging
+    gem_dir.mkdir(parents=True)
+    (gem_dir / "settings.json").write_text(json.dumps({"selectedAuthType": "oauth"}), encoding="utf-8")
+
+    # 1. `ra-cli install --harness all` configures all 6 local harnesses
+    rc_all = cli.main(
+        [
+            "install",
+            "--harness",
+            "all",
+            "--opencode-dir",
+            str(oc_dir),
+            "--gemini-dir",
+            str(gem_dir),
+            "--claude-dir",
+            str(claude_dir),
+            "--antigravity-dir",
+            str(agy_dir),
+            "--claude-desktop-dir",
+            str(desktop_dir),
+            "--cursor-dir",
+            str(cursor_dir),
+            "--no-migrate",
+        ]
+    )
+    assert rc_all == 0
+    _ = capsys.readouterr()
+
+    assert (oc_dir / "opencode.json").exists()
+
+    # Verify Gemini CLI settings.json & GEMINI.md programmatic 2-phase enforcement
+    gem_cfg = json.loads((gem_dir / "settings.json").read_text(encoding="utf-8"))
+    assert gem_cfg["selectedAuthType"] == "oauth"
+    gem_mcp = gem_cfg["mcpServers"]
+    for srv in ("ra-docs", "ra-search", "ra-kg"):
+        assert gem_mcp[srv]["trust"] is True
+    assert gem_mcp["ra-ingest"]["trust"] is True
+    assert gem_mcp["ra-ingest"]["excludeTools"] == ["confirm_save_paper"]
+    assert gem_mcp["ra-ingest-confirm"]["trust"] is False
+    assert gem_mcp["ra-ingest-confirm"]["includeTools"] == ["confirm_save_paper"]
+    assert cli.AGENTS_START_MARKER in (gem_dir / "GEMINI.md").read_text(encoding="utf-8")
+
+    # Verify Claude Code ~/.claude.json, ~/.claude/settings.json & CLAUDE.md
+    claude_json = json.loads((claude_dir.parent / ".claude.json").read_text(encoding="utf-8"))
+    for srv in ("ra_docs", "ra_search", "ra_ingest", "ra_kg"):
+        assert srv in claude_json["mcpServers"]
+        assert claude_json["mcpServers"][srv]["type"] == "stdio"
+    claude_settings = json.loads((claude_dir / "settings.json").read_text(encoding="utf-8"))
+    assert "mcp__ra_ingest__stage_paper" in claude_settings["permissions"]["allow"]
+    assert "mcp__ra_ingest__confirm_save_paper" in claude_settings["permissions"]["ask"]
+    assert cli.AGENTS_START_MARKER in (claude_dir / "CLAUDE.md").read_text(encoding="utf-8")
+
+    # Verify Antigravity, Claude Desktop & Cursor configs
+    agy_cfg = json.loads((agy_dir / "mcp_config.json").read_text(encoding="utf-8"))
+    assert set(agy_cfg["mcpServers"].keys()) == {"ra_docs", "ra_search", "ra_ingest", "ra_kg"}
+    assert cli.AGENTS_START_MARKER in (agy_dir / "GEMINI.md").read_text(encoding="utf-8")
+
+    desktop_cfg = json.loads((desktop_dir / "claude_desktop_config.json").read_text(encoding="utf-8"))
+    assert set(desktop_cfg["mcpServers"].keys()) == {"ra_docs", "ra_search", "ra_ingest", "ra_kg"}
+
+    cursor_cfg = json.loads((cursor_dir / "mcp.json").read_text(encoding="utf-8"))
+    assert set(cursor_cfg["mcpServers"].keys()) == {"ra_docs", "ra_search", "ra_ingest", "ra_kg"}
+    assert cli.AGENTS_START_MARKER in (cursor_dir / "rules" / "research-agent.mdc").read_text(encoding="utf-8")
+
+    # 2. Unknown harnesses print a clean notice listing supported targets
+    rc_unk = cli.main(["install", "--harness", "unknown-app", "--no-migrate"])
+    assert rc_unk == 0
+    assert "Skipped unknown harness 'unknown-app'" in capsys.readouterr().out
+
+    # 3. Verify unified HTTP hub & MCP ToolAnnotations:
+    # Only `confirm_save_paper` has destructiveHint=True; all other 28 tools have destructiveHint=False
+    hub = cli.create_unified_http_mcp_server()
+    tools = asyncio.run(hub.list_tools())
+    assert len(tools) == 29
+    confirm_tool = next(t for t in tools if t.name == "ra_ingest_confirm_save_paper")
+    assert confirm_tool.annotations is not None
+    assert confirm_tool.annotations.destructive_hint is True
+    assert confirm_tool.annotations.read_only_hint is False
+
+    for other in tools:
+        if other.name != "ra_ingest_confirm_save_paper":
+            assert other.annotations is not None, f"{other.name} missing MCP annotations"
+            assert other.annotations.destructive_hint is False, f"{other.name} should have destructive_hint=False"
+
+
+
 
 
 

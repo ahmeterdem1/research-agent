@@ -36,6 +36,15 @@ MCP_SERVERS = {
     "ra_kg": "ra-mcp-kg",
 }
 
+SUPPORTED_HARNESSES = (
+    "opencode",
+    "gemini-cli",
+    "claude-code",
+    "antigravity",
+    "claude-desktop",
+    "cursor",
+)
+
 DEFAULT_PERMISSIONS = {
     "ra_docs_*": "allow",
     "ra_search_*": "allow",
@@ -47,6 +56,38 @@ DEFAULT_PERMISSIONS = {
 
 AGENTS_START_MARKER = "<!-- RESEARCH_AGENT_START -->"
 AGENTS_END_MARKER = "<!-- RESEARCH_AGENT_END -->"
+
+
+def _resolve_mcp_binary(binary_name: str) -> str:
+    """Resolve absolute executable path for an MCP server binary if found on PATH or beside sys.executable."""
+    found = shutil.which(binary_name)
+    if found:
+        return str(Path(found).resolve())
+    candidate = Path(sys.executable).parent / binary_name
+    if candidate.exists():
+        return str(candidate.resolve())
+    return binary_name
+
+
+def _inject_instructions_snippet(target_md_path: Path) -> Optional[Path]:
+    """Idempotently inject or refresh the global Research Agent instructions snippet in `target_md_path`."""
+    snippet_path = settings.PROJECT_ROOT / "config" / "opencode_templates" / "AGENTS_SNIPPET.md"
+    if not snippet_path.exists():
+        return None
+    target_md_path.parent.mkdir(parents=True, exist_ok=True)
+    snippet = snippet_path.read_text(encoding="utf-8").strip()
+    existing_md = target_md_path.read_text(encoding="utf-8") if target_md_path.exists() else ""
+    if AGENTS_START_MARKER in existing_md and AGENTS_END_MARKER in existing_md:
+        before = existing_md.split(AGENTS_START_MARKER)[0].rstrip()
+        after = existing_md.split(AGENTS_END_MARKER)[-1].lstrip()
+        parts = [p for p in (before, snippet, after) if p]
+        updated_md = "\n\n".join(parts) + "\n"
+    elif existing_md.strip():
+        updated_md = existing_md.rstrip() + "\n\n" + snippet + "\n"
+    else:
+        updated_md = snippet + "\n"
+    target_md_path.write_text(updated_md, encoding="utf-8")
+    return target_md_path
 
 
 def _default_opencode_dir() -> Path:
@@ -187,31 +228,373 @@ def install_opencode(
         logger.info("Installed OpenCode agent profile: %s", target)
 
     # 3. Inject or update AGENTS.md snippet
-    snippet_path = templates_dir / "AGENTS_SNIPPET.md"
     agents_md_path = cfg_dir / "AGENTS.md"
-    if snippet_path.exists():
-        snippet = snippet_path.read_text(encoding="utf-8").strip()
-        existing_md = agents_md_path.read_text(encoding="utf-8") if agents_md_path.exists() else ""
-        if AGENTS_START_MARKER in existing_md and AGENTS_END_MARKER in existing_md:
-            before = existing_md.split(AGENTS_START_MARKER)[0].rstrip()
-            after = existing_md.split(AGENTS_END_MARKER)[-1].lstrip()
-            parts = [p for p in (before, snippet, after) if p]
-            updated_md = "\n\n".join(parts) + "\n"
-        elif existing_md.strip():
-            updated_md = existing_md.rstrip() + "\n\n" + snippet + "\n"
-        else:
-            updated_md = snippet + "\n"
-        agents_md_path.write_text(updated_md, encoding="utf-8")
+    if _inject_instructions_snippet(agents_md_path):
         logger.info("Updated global instructions at %s", agents_md_path)
 
     migrated = migrate_repo_data_to_global() if migrate_repo_data else []
 
     return {
+        "harness": "opencode",
         "config_path": str(cfg_path),
         "agents_installed": sorted(installed_agents),
         "agents_md_path": str(agents_md_path),
         "migrated": migrated,
     }
+
+
+def install_gemini_cli(
+    gemini_dir: Optional[Path] = None,
+    migrate_repo_data: bool = True,
+) -> dict:
+    """
+    Register Research Agent MCP servers inside `~/.gemini/settings.json` with
+    programmatic 2-phase paper-save gating (`confirm_save_paper` isolated on `trust: False`)
+    and inject instructions into `~/.gemini/GEMINI.md`.
+    """
+    env_dir = os.getenv("GEMINI_CONFIG_DIR", "").strip()
+    cfg_dir = (gemini_dir or (Path(env_dir) if env_dir else Path.home() / ".gemini")).expanduser().resolve()
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+
+    cfg_path = cfg_dir / "settings.json"
+    cfg = _load_json_file(cfg_path)
+    mcp_servers = cfg.setdefault("mcpServers", {})
+
+    mcp_servers["ra-docs"] = {
+        "command": _resolve_mcp_binary("ra-mcp-docs"),
+        "args": [],
+        "trust": True,
+    }
+    mcp_servers["ra-search"] = {
+        "command": _resolve_mcp_binary("ra-mcp-search"),
+        "args": [],
+        "trust": True,
+    }
+    mcp_servers["ra-kg"] = {
+        "command": _resolve_mcp_binary("ra-mcp-kg"),
+        "args": [],
+        "trust": True,
+    }
+    mcp_servers["ra-ingest"] = {
+        "command": _resolve_mcp_binary("ra-mcp-ingest"),
+        "args": [],
+        "trust": True,
+        "excludeTools": ["confirm_save_paper"],
+    }
+    mcp_servers["ra-ingest-confirm"] = {
+        "command": _resolve_mcp_binary("ra-mcp-ingest"),
+        "args": [],
+        "trust": False,
+        "includeTools": ["confirm_save_paper"],
+    }
+
+    cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    logger.info("Updated Gemini CLI configuration at %s", cfg_path)
+
+    gemini_md_path = cfg_dir / "GEMINI.md"
+    if _inject_instructions_snippet(gemini_md_path):
+        logger.info("Updated Gemini CLI instructions at %s", gemini_md_path)
+
+    migrated = migrate_repo_data_to_global() if migrate_repo_data else []
+    return {
+        "harness": "gemini-cli",
+        "config_path": str(cfg_path),
+        "instructions_path": str(gemini_md_path),
+        "migrated": migrated,
+    }
+
+
+def install_claude_code(
+    claude_dir: Optional[Path] = None,
+    claude_json_path: Optional[Path] = None,
+    migrate_repo_data: bool = True,
+) -> dict:
+    """
+    Register Research Agent MCP servers inside `~/.claude.json` with programmatic
+    2-phase paper-save gating (`permissions.ask` on `mcp__ra_ingest__confirm_save_paper`)
+    in `~/.claude/settings.json` and instructions in `~/.claude/CLAUDE.md`.
+    """
+    env_dir = os.getenv("CLAUDE_CONFIG_DIR", "").strip()
+    cfg_dir = (claude_dir or (Path(env_dir) if env_dir else Path.home() / ".claude")).expanduser().resolve()
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+
+    mcp_json_path = (
+        claude_json_path
+        or (cfg_dir.parent / ".claude.json" if (claude_dir is not None or env_dir) else Path.home() / ".claude.json")
+    ).expanduser().resolve()
+    mcp_json_path.parent.mkdir(parents=True, exist_ok=True)
+
+    mcp_cfg = _load_json_file(mcp_json_path)
+    mcp_servers = mcp_cfg.setdefault("mcpServers", {})
+    for server_key, binary_name in MCP_SERVERS.items():
+        existing = mcp_servers.get(server_key, {})
+        mcp_servers[server_key] = {
+            **existing,
+            "type": "stdio",
+            "command": _resolve_mcp_binary(binary_name),
+            "args": [],
+        }
+    mcp_json_path.write_text(json.dumps(mcp_cfg, indent=2), encoding="utf-8")
+    logger.info("Updated Claude Code MCP config at %s", mcp_json_path)
+
+    settings_path = cfg_dir / "settings.json"
+    settings_cfg = _load_json_file(settings_path)
+    perms = settings_cfg.setdefault("permissions", {})
+    allow_list = perms.setdefault("allow", [])
+    ask_list = perms.setdefault("ask", [])
+
+    for rule in (
+        "mcp__ra_docs__*",
+        "mcp__ra_search__*",
+        "mcp__ra_kg__*",
+        "mcp__ra_ingest__stage_paper",
+        "mcp__ra_ingest__refresh_library",
+    ):
+        if rule not in allow_list:
+            allow_list.append(rule)
+
+    if "mcp__ra_ingest__confirm_save_paper" not in ask_list:
+        ask_list.append("mcp__ra_ingest__confirm_save_paper")
+
+    # Ensure confirm_save_paper is not mistakenly pre-allowed
+    if "mcp__ra_ingest__confirm_save_paper" in allow_list:
+        allow_list.remove("mcp__ra_ingest__confirm_save_paper")
+
+    settings_path.write_text(json.dumps(settings_cfg, indent=2), encoding="utf-8")
+    logger.info("Updated Claude Code permissions at %s", settings_path)
+
+    claude_md_path = cfg_dir / "CLAUDE.md"
+    if _inject_instructions_snippet(claude_md_path):
+        logger.info("Updated Claude Code instructions at %s", claude_md_path)
+
+    migrated = migrate_repo_data_to_global() if migrate_repo_data else []
+    return {
+        "harness": "claude-code",
+        "config_path": str(mcp_json_path),
+        "settings_path": str(settings_path),
+        "instructions_path": str(claude_md_path),
+        "migrated": migrated,
+    }
+
+
+def install_antigravity(
+    antigravity_dir: Optional[Path] = None,
+    migrate_repo_data: bool = True,
+) -> dict:
+    """
+    Register Research Agent MCP servers inside `~/.gemini/config/mcp_config.json`
+    and inject global instructions into `~/.gemini/config/GEMINI.md` for Antigravity.
+    """
+    env_dir = os.getenv("ANTIGRAVITY_CONFIG_DIR", "").strip()
+    cfg_dir = (
+        antigravity_dir or (Path(env_dir) if env_dir else Path.home() / ".gemini" / "config")
+    ).expanduser().resolve()
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+
+    cfg_path = cfg_dir / "mcp_config.json"
+    cfg = _load_json_file(cfg_path)
+    mcp_servers = cfg.setdefault("mcpServers", {})
+    for server_key, binary_name in MCP_SERVERS.items():
+        existing = mcp_servers.get(server_key, {})
+        mcp_servers[server_key] = {
+            **existing,
+            "command": _resolve_mcp_binary(binary_name),
+            "args": [],
+        }
+    cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    logger.info("Updated Antigravity MCP config at %s", cfg_path)
+
+    gemini_md_path = cfg_dir / "GEMINI.md"
+    if _inject_instructions_snippet(gemini_md_path):
+        logger.info("Updated Antigravity instructions at %s", gemini_md_path)
+
+    migrated = migrate_repo_data_to_global() if migrate_repo_data else []
+    return {
+        "harness": "antigravity",
+        "config_path": str(cfg_path),
+        "instructions_path": str(gemini_md_path),
+        "migrated": migrated,
+    }
+
+
+def install_claude_desktop(
+    claude_desktop_dir: Optional[Path] = None,
+    migrate_repo_data: bool = True,
+) -> dict:
+    """
+    Register Research Agent MCP servers inside Claude Desktop's
+    `claude_desktop_config.json` (macOS `~/Library/Application Support/Claude/` or
+    Linux `~/.config/Claude/`).
+    """
+    if claude_desktop_dir is not None:
+        cfg_dir = Path(claude_desktop_dir).expanduser().resolve()
+    elif (Path.home() / "Library" / "Application Support").exists():
+        cfg_dir = (Path.home() / "Library" / "Application Support" / "Claude").resolve()
+    else:
+        cfg_dir = (Path.home() / ".config" / "Claude").resolve()
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+
+    cfg_path = cfg_dir / "claude_desktop_config.json"
+    cfg = _load_json_file(cfg_path)
+    mcp_servers = cfg.setdefault("mcpServers", {})
+    for server_key, binary_name in MCP_SERVERS.items():
+        existing = mcp_servers.get(server_key, {})
+        mcp_servers[server_key] = {
+            **existing,
+            "command": _resolve_mcp_binary(binary_name),
+            "args": [],
+        }
+    cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    logger.info("Updated Claude Desktop MCP config at %s", cfg_path)
+
+    migrated = migrate_repo_data_to_global() if migrate_repo_data else []
+    return {
+        "harness": "claude-desktop",
+        "config_path": str(cfg_path),
+        "migrated": migrated,
+    }
+
+
+def install_cursor(
+    cursor_dir: Optional[Path] = None,
+    migrate_repo_data: bool = True,
+) -> dict:
+    """
+    Register Research Agent MCP servers inside `~/.cursor/mcp.json`
+    and inject global Research Agent instructions into `~/.cursor/rules/research-agent.mdc`.
+    """
+    env_dir = os.getenv("CURSOR_CONFIG_DIR", "").strip()
+    cfg_dir = (cursor_dir or (Path(env_dir) if env_dir else Path.home() / ".cursor")).expanduser().resolve()
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+
+    cfg_path = cfg_dir / "mcp.json"
+    cfg = _load_json_file(cfg_path)
+    mcp_servers = cfg.setdefault("mcpServers", {})
+    for server_key, binary_name in MCP_SERVERS.items():
+        existing = mcp_servers.get(server_key, {})
+        mcp_servers[server_key] = {
+            **existing,
+            "command": _resolve_mcp_binary(binary_name),
+            "args": [],
+        }
+    cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    logger.info("Updated Cursor MCP config at %s", cfg_path)
+
+    rules_path = cfg_dir / "rules" / "research-agent.mdc"
+    if _inject_instructions_snippet(rules_path):
+        logger.info("Updated Cursor rules at %s", rules_path)
+
+    migrated = migrate_repo_data_to_global() if migrate_repo_data else []
+    return {
+        "harness": "cursor",
+        "config_path": str(cfg_path),
+        "instructions_path": str(rules_path),
+        "migrated": migrated,
+    }
+
+
+def install_harnesses(
+    harnesses: list[str],
+    opencode_config_dir: Optional[Path] = None,
+    gemini_dir: Optional[Path] = None,
+    claude_dir: Optional[Path] = None,
+    antigravity_dir: Optional[Path] = None,
+    claude_desktop_dir: Optional[Path] = None,
+    cursor_dir: Optional[Path] = None,
+    enable_by_default: bool = False,
+    migrate_repo_data: bool = True,
+) -> dict:
+    """Install Research Agent across one or more supported AI harnesses."""
+    requested: list[str] = []
+    for raw in harnesses:
+        for item in raw.split(","):
+            tok = item.strip().lower()
+            if not tok:
+                continue
+            if tok == "all":
+                for h in SUPPORTED_HARNESSES:
+                    if h not in requested:
+                        requested.append(h)
+            elif tok not in requested:
+                requested.append(tok)
+
+    if not requested:
+        requested = ["opencode"]
+
+    installed: list[dict] = []
+    skipped: list[tuple[str, str]] = []
+    did_migrate = False
+
+    for target in requested:
+        should_migrate = migrate_repo_data and not did_migrate
+        if target == "opencode":
+            res = install_opencode(
+                opencode_config_dir=opencode_config_dir,
+                enable_by_default=enable_by_default,
+                migrate_repo_data=should_migrate,
+            )
+            installed.append(res)
+            did_migrate = True
+        elif target == "gemini-cli":
+            res = install_gemini_cli(
+                gemini_dir=gemini_dir,
+                migrate_repo_data=should_migrate,
+            )
+            installed.append(res)
+            did_migrate = True
+        elif target == "claude-code":
+            res = install_claude_code(
+                claude_dir=claude_dir,
+                migrate_repo_data=should_migrate,
+            )
+            installed.append(res)
+            did_migrate = True
+        elif target == "antigravity":
+            res = install_antigravity(
+                antigravity_dir=antigravity_dir,
+                migrate_repo_data=should_migrate,
+            )
+            installed.append(res)
+            did_migrate = True
+        elif target == "claude-desktop":
+            res = install_claude_desktop(
+                claude_desktop_dir=claude_desktop_dir,
+                migrate_repo_data=should_migrate,
+            )
+            installed.append(res)
+            did_migrate = True
+        elif target == "cursor":
+            res = install_cursor(
+                cursor_dir=cursor_dir,
+                migrate_repo_data=should_migrate,
+            )
+            installed.append(res)
+            did_migrate = True
+        else:
+            reason = (
+                f"Skipped unknown harness '{target}'. "
+                f"Supported harnesses: {', '.join(SUPPORTED_HARNESSES)}."
+            )
+            logger.warning("%s", reason)
+            skipped.append((target, reason))
+
+    return {"installed": installed, "skipped": skipped}
+
+
+def create_unified_http_mcp_server():
+    """Mount all 4 Research Agent MCP servers into one unified Streamable HTTP hub."""
+    from fastmcp import FastMCP
+    from src.mcp_servers.document_tools import mcp as docs_mcp
+    from src.mcp_servers.search_tools import mcp as search_mcp
+    from src.mcp_servers.file_tools import mcp as ingest_mcp
+    from src.mcp_servers.kg_tools import mcp as kg_mcp
+
+    hub = FastMCP("ResearchAgent")
+    hub.mount(docs_mcp, namespace="ra_docs")
+    hub.mount(search_mcp, namespace="ra_search")
+    hub.mount(ingest_mcp, namespace="ra_ingest")
+    hub.mount(kg_mcp, namespace="ra_kg")
+    return hub
 
 
 def configure_project(
@@ -355,11 +738,19 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    # 1. install-opencode
+    # 1. install-opencode / install
     p_install = sub.add_parser(
         "install-opencode",
         aliases=["install"],
-        help="Register MCP servers, permissions, and agents in ~/.config/opencode/",
+        help="Register MCP servers, programmatic 2-phase confirmation gates, and instructions in supported AI harnesses",
+    )
+    p_install.add_argument(
+        "--harness",
+        "--target",
+        dest="harnesses",
+        action="append",
+        default=None,
+        help="Target harness(es): opencode, gemini-cli, claude-code, antigravity, claude-desktop, cursor, or all (defaults to opencode)",
     )
     p_install.add_argument(
         "--opencode-dir",
@@ -368,11 +759,41 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Custom OpenCode config directory (defaults to ~/.config/opencode)",
     )
     p_install.add_argument(
+        "--gemini-dir",
+        type=Path,
+        default=None,
+        help="Custom Gemini CLI config directory (defaults to ~/.gemini)",
+    )
+    p_install.add_argument(
+        "--claude-dir",
+        type=Path,
+        default=None,
+        help="Custom Claude Code config directory (defaults to ~/.claude)",
+    )
+    p_install.add_argument(
+        "--antigravity-dir",
+        type=Path,
+        default=None,
+        help="Custom Antigravity config directory (defaults to ~/.gemini/config)",
+    )
+    p_install.add_argument(
+        "--claude-desktop-dir",
+        type=Path,
+        default=None,
+        help="Custom Claude Desktop config directory",
+    )
+    p_install.add_argument(
+        "--cursor-dir",
+        type=Path,
+        default=None,
+        help="Custom Cursor config directory (defaults to ~/.cursor)",
+    )
+    p_install.add_argument(
         "--enable-by-default",
         "--enable-globally",
         dest="enable_by_default",
         action="store_true",
-        help="Enable ra_* MCP servers globally by default (otherwise disabled until enabled per project)",
+        help="Enable ra_* MCP servers globally by default in OpenCode (otherwise disabled until enabled per project)",
     )
     p_install.add_argument(
         "--no-migrate",
@@ -636,21 +1057,72 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Remove saved OpenReview credentials/token from ~/.research-agent/openreview_auth.json",
     )
 
+    # 11. serve-http (Gemini Consumer App Custom MCP Connector)
+    p_serve = sub.add_parser(
+        "serve-http",
+        help="Run a unified Streamable HTTP MCP server (/mcp) for the Gemini consumer app's Custom MCP Connectors",
+    )
+    p_serve.add_argument(
+        "--host",
+        type=str,
+        default="127.0.0.1",
+        help="Host interface to bind (default: 127.0.0.1)",
+    )
+    p_serve.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="HTTP port to listen on (default: 8765)",
+    )
+    p_serve.add_argument(
+        "--path",
+        type=str,
+        default="/mcp",
+        help="Streamable HTTP endpoint path (default: /mcp)",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command in ("install-opencode", "install"):
-        res = install_opencode(
+        targets = args.harnesses if args.harnesses else ["opencode"]
+        outcome = install_harnesses(
+            harnesses=targets,
             opencode_config_dir=args.opencode_dir,
+            gemini_dir=args.gemini_dir,
+            claude_dir=args.claude_dir,
+            antigravity_dir=args.antigravity_dir,
+            claude_desktop_dir=args.claude_desktop_dir,
+            cursor_dir=args.cursor_dir,
             enable_by_default=args.enable_by_default,
             migrate_repo_data=not args.no_migrate,
         )
-        print(f"Installed OpenCode config: {res['config_path']}")
-        print(f"Installed agents: {', '.join(res['agents_installed'])}")
-        print(f"Updated global instructions: {res['agents_md_path']}")
-        if res["migrated"]:
-            print("Migrated data to global home:")
-            for m in res["migrated"]:
-                print(f"  - {m}")
+        for res in outcome["installed"]:
+            h = res.get("harness", "opencode")
+            if h == "opencode":
+                print(f"Installed OpenCode config: {res['config_path']}")
+                print(f"Installed agents: {', '.join(res['agents_installed'])}")
+                print(f"Updated global instructions: {res['agents_md_path']}")
+            elif h == "gemini-cli":
+                print(f"Installed Gemini CLI config: {res['config_path']}")
+                print(f"Updated Gemini CLI instructions: {res['instructions_path']}")
+            elif h == "claude-code":
+                print(f"Installed Claude Code MCP config: {res['config_path']}")
+                print(f"Installed Claude Code permissions: {res['settings_path']}")
+                print(f"Updated Claude Code instructions: {res['instructions_path']}")
+            elif h == "antigravity":
+                print(f"Installed Antigravity MCP config: {res['config_path']}")
+                print(f"Updated Antigravity instructions: {res['instructions_path']}")
+            elif h == "claude-desktop":
+                print(f"Installed Claude Desktop MCP config: {res['config_path']}")
+            elif h == "cursor":
+                print(f"Installed Cursor MCP config: {res['config_path']}")
+                print(f"Updated Cursor rules: {res['instructions_path']}")
+            if res.get("migrated"):
+                print("Migrated data to global home:")
+                for m in res["migrated"]:
+                    print(f"  - {m}")
+        for _, skip_msg in outcome["skipped"]:
+            print(skip_msg)
         return 0
 
     if args.command == "project":
@@ -955,6 +1427,20 @@ def main(argv: Optional[list[str]] = None) -> int:
         if headings:
             preview_h = ", ".join(headings[:8]) + ("..." if len(headings) > 8 else "")
             print(f"  - Sections : {preview_h}")
+        return 0
+
+    if args.command == "serve-http":
+        norm_path = "/" + args.path.lstrip("/")
+        local_url = f"http://{args.host}:{args.port}{norm_path}"
+        print(
+            "Starting unified Research Agent Streamable HTTP MCP server...\n"
+            f"  - Endpoint             : {local_url}\n"
+            "  - 2-Phase Save Policy  : MCP ToolAnnotations (confirm_save_paper marks readOnlyHint=False, destructiveHint=True)\n"
+            "  - Gemini Consumer App  : Open Customize -> Connectors -> + Custom and add the URL.\n"
+            f"  - HTTPS Tunnel (if req): cloudflared tunnel --url http://{args.host}:{args.port}"
+        )
+        hub = create_unified_http_mcp_server()
+        hub.run(transport="streamable-http", host=args.host, port=args.port, path=norm_path)
         return 0
 
     return 0

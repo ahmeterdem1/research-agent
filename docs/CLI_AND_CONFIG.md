@@ -62,24 +62,47 @@ Implemented in [config/settings.py](file:///Users/ahmeterdem/Desktop/code/resear
 
 Source: [src/cli.py](file:///Users/ahmeterdem/Desktop/code/research%20agent/src/cli.py)
 
-### 3.1 `ra-cli install-opencode`
-Registers the Research Agent extension globally with OpenCode:
-* Merges `ra_docs`, `ra_search`, `ra_ingest`, and `ra_kg` into `~/.config/opencode/opencode.json`.
-* Configures `"ra_ingest_confirm_save_paper": "ask"` in the global `"permission"` block.
-* Copies `researcher.md` and `citation-walker.md` into `~/.config/opencode/agents/`.
-* Idempotently injects the Research Agent instructions block (`<!-- RESEARCH_AGENT_START --> ... <!-- RESEARCH_AGENT_END -->`) into `~/.config/opencode/AGENTS.md`.
-* Migrates any legacy `<repo>/data/` files (`vtree.json`, `research_agent.db`, `cache/texts/*.md`, `.env`) into `~/.research-agent/`.
+### 3.1 `ra-cli install` / `ra-cli install-opencode` (Multi-Harness Setup)
+Registers the 4 Research Agent MCP servers, **2-phase paper-save safety** (`confirm_save_paper` marked `readOnlyHint=False, destructiveHint=True` via MCP `ToolAnnotations` while all 28 read/search/KG/staging tools mark `destructiveHint=False`), and global instructions across all supported local harnesses:
+
+| Harness | Config & Instructions Files | How 2-Phase Save (`confirm_save_paper`) Is Enforced |
+|---|---|---|
+| **`opencode`** | `~/.config/opencode/opencode.json`, `AGENTS.md`, `agents/*.md` | `"permission": {"ra_ingest_confirm_save_paper": "ask"}` + MCP `ToolAnnotations` |
+| **`gemini-cli`** | `~/.gemini/settings.json`, `GEMINI.md` | `"ra-ingest"` (`"trust": true`, `"excludeTools": ["confirm_save_paper"]`) + `"ra-ingest-confirm"` (`"trust": false`, `"includeTools": ["confirm_save_paper"]`) |
+| **`claude-code`** | `~/.claude.json`, `~/.claude/settings.json`, `CLAUDE.md` | `"permissions.allow"` for read/search/kg/stage + `"permissions.ask": ["mcp__ra_ingest__confirm_save_paper"]` |
+| **`antigravity`** | `~/.gemini/config/mcp_config.json`, `GEMINI.md` | MCP `ToolAnnotations` (`readOnlyHint=False, destructiveHint=True` on `confirm_save_paper`) |
+| **`claude-desktop`** | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) / `~/.config/Claude/claude_desktop_config.json` (Linux) | MCP `ToolAnnotations` (`readOnlyHint=False, destructiveHint=True` prompts in desktop UI) |
+| **`cursor`** | `~/.cursor/mcp.json`, `~/.cursor/rules/research-agent.mdc` | MCP `ToolAnnotations` (`readOnlyHint=False, destructiveHint=True` prompts in Cursor UI) |
 
 ```bash
-# Install with MCP servers disabled by default (recommended; enable per project via `ra-cli project`)
+# Install for OpenCode (default; MCP servers disabled globally until enabled per project via `ra-cli project`)
 ra-cli install-opencode
+ra-cli install --enable-by-default
 
-# Install with all 4 MCP servers enabled globally in every project by default
-ra-cli install-opencode --enable-by-default
+# Install across ALL 6 supported local harnesses at once
+ra-cli install --harness all
+
+# Install individually for any harness
+ra-cli install --harness gemini-cli
+ra-cli install --harness claude-code
+ra-cli install --harness antigravity
+ra-cli install --harness claude-desktop
+ra-cli install --harness cursor
 
 # Custom OpenCode config directory and skip data migration
-ra-cli install-opencode --opencode-dir ~/.config/opencode --no-migrate
+ra-cli install --opencode-dir ~/.config/opencode --no-migrate
 ```
+
+### 3.1b Connecting the Gemini Consumer App (`ra-cli serve-http`)
+The consumer Gemini app (**Customize -> Connectors -> + Custom**) connects to **Streamable HTTP** MCP URLs rather than local `stdio` JSON config files:
+
+1. Start the unified Research Agent HTTP MCP hub:
+   ```bash
+   ra-cli serve-http --host 127.0.0.1 --port 8765
+   ```
+   *(All 29 MCP tools publish standard MCP `ToolAnnotations`: read/search tools expose `readOnlyHint=True, destructiveHint=False`, KG/staging tools expose `destructiveHint=False`, and `confirm_save_paper` exposes `readOnlyHint=False, destructiveHint=True` so Gemini's UI displays a confirmation prompt before saving).*
+2. If the Gemini consumer app requires a public HTTPS URL rather than `http://127.0.0.1:8765/mcp`, expose it with a private tunnel (e.g., `cloudflared tunnel --url http://127.0.0.1:8765`).
+3. In Gemini, open **Customize -> Connectors -> + Custom**, enter `<url>/mcp`, and connect.
 
 ### 3.2 `ra-cli project`
 Enables or disables Research Agent MCP servers inside a specific project's `opencode.json` (which OpenCode deep-merges over `~/.config/opencode/opencode.json`):

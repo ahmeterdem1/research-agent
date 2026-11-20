@@ -24,6 +24,13 @@ logger = get_logger(__name__)
 
 mcp = FastMCP("DocumentTools")
 
+_READONLY_ANNOTATIONS = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": False,
+}
+
 
 _MANAGER_CACHE: dict[str, tuple[int, VTreeManager]] = {}
 
@@ -90,7 +97,7 @@ def _iter_managers(scope: str) -> list[tuple[str, VTreeManager]]:
     return managers
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READONLY_ANNOTATIONS)
 @track_tool("ra_docs")
 def get_dir_summary(
     virtual_path: str,
@@ -111,7 +118,7 @@ def get_dir_summary(
     return node.get("summary", "No summary available.")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READONLY_ANNOTATIONS)
 @track_tool("ra_docs")
 def list_doc_summaries(
     virtual_path: str,
@@ -142,7 +149,7 @@ def list_doc_summaries(
     return "\n".join(result)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READONLY_ANNOTATIONS)
 @track_tool("ra_docs")
 def list_tree(
     virtual_path: str = "/",
@@ -188,7 +195,7 @@ def list_tree(
     return "\n\n".join(blocks)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READONLY_ANNOTATIONS)
 @track_tool("ra_docs")
 def get_document(
     virtual_path: str,
@@ -289,7 +296,7 @@ def get_document(
         return f"Error reading document text: {e}"
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READONLY_ANNOTATIONS)
 @track_tool("ra_docs")
 def get_documents(
     virtual_paths: List[str],
@@ -303,7 +310,7 @@ def get_documents(
     return "\n".join(results)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READONLY_ANNOTATIONS)
 @track_tool("ra_docs")
 def search_library(
     query: str,
@@ -353,7 +360,7 @@ def search_library(
     return "\n".join(formatted)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READONLY_ANNOTATIONS)
 @track_tool("ra_docs")
 def get_document_real_path(
     virtual_path: str,

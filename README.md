@@ -1,6 +1,6 @@
-# Research Agent — System-Wide OpenCode Extension
+# Research Agent — System-Wide MCP Tool Ecosystem
 
-A local-first academic and technical research extension for [**OpenCode**](https://github.com/anomalyco/opencode) (`opencode` TUI, `opencode web`, and OpenCode Desktop). 
+A local-first academic and technical research extension for your harness of choice. 
 
 ## Research Agent Proposes You:
 
@@ -74,16 +74,29 @@ EXTRACTOR_MODE=pymupdf
 EOF
 ```
 
-### 3. Register with OpenCode (and Optional OpenReview Login)
-Run the installer once to merge the MCP servers, permission gates, agent profiles (`researcher`, `@citation-walker`), and global `AGENTS.md` instructions into `~/.config/opencode/`:
+### 3. Register with Your AI Harnesses (OpenCode, Gemini CLI, Claude Code, Antigravity, Claude Desktop, Cursor & Gemini App)
+Run the installer once to merge the MCP servers, MCP `ToolAnnotations` (`destructiveHint=True` on `confirm_save_paper`, `destructiveHint=False` on all read/search/KG/staging tools), harness permission gates, and global instructions across all supported AI harnesses:
 
 ```bash
+# Register OpenCode (~/.config/opencode/) — or install across ALL 6 local harnesses at once
 ra-cli install-opencode
+ra-cli install --harness all
+
+# Or target a specific harness (gemini-cli, claude-code, antigravity, claude-desktop, cursor)
+ra-cli install --harness gemini-cli
+ra-cli install --harness claude-code
+ra-cli install --harness antigravity
+ra-cli install --harness claude-desktop
+ra-cli install --harness cursor
+
+# For any other apps:
+# Serves all 4 MCP modules over Streamable HTTP with MCP ToolAnnotations for UI confirmation on save
+ra-cli serve-http --port 8765
 
 # (Optional) Authenticate with your personal OpenReview account to enable openreview_search and peer-review tools
 ra-cli login-openreview
 ```
-*(By default, the 4 MCP servers are registered with `"enabled": false` globally so unrelated coding projects have zero tool-schema overhead until you enable them in a project).*
+*(In OpenCode, the 4 MCP servers default to `"enabled": false` globally so unrelated coding projects have zero tool-schema overhead until you enable them per project; across all MCP clients, `confirm_save_paper` carries `readOnlyHint=False, destructiveHint=True` so client UIs prompt before saving).*
 
 ### 4. Index or Incrementally Refresh Your Research Library
 Build your Global Virtual Tree (`~/.research-agent/vtrees/global.json`) or a Project-Local Virtual Tree (`.opencode/vtree.json`), or incrementally index newly dropped PDFs into an existing tree:

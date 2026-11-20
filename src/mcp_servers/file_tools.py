@@ -16,6 +16,7 @@ Features:
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -40,6 +41,13 @@ from src.vtree.store import VTreeStore
 logger = get_logger(__name__)
 
 mcp = FastMCP("FileTools")
+
+_STAGE_ANNOTATIONS = {
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": True,
+}
 
 # In-memory staging cache synchronized with settings.STAGED_DIR on disk
 _STAGED_PAPERS: dict[str, dict] = {}
@@ -762,7 +770,7 @@ def _resolve_paper_content(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_STAGE_ANNOTATIONS)
 @track_tool("ra_ingest")
 def stage_paper(
     url_or_arxiv_id: str,
@@ -984,14 +992,22 @@ def _persist_to_vtree(paper_info: dict, tracker: Optional[StepTracker] = None) -
     return saved_pdf_path
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations={
+        "title": "Confirm and Save Staged Paper",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    }
+)
 @track_tool("ra_ingest")
 def confirm_save_paper(temp_id: str) -> str:
     """
     Finalizes the saving of a staged paper into the local VTree library (`global` or `project`),
     moves any downloaded PDF into `<library_root>/Downloaded/`, and refreshes ancestor
     directory summaries using the OpenRouter summarization model.
-    Requires explicit user approval before invocation (enforced via OpenCode `"ask"` permission).
+    Requires explicit user approval before invocation (enforced via MCP `destructiveHint=True` annotation and harness `"ask"` / `"trust": false` policies).
     """
     paper_info = _pop_staged_manifest(temp_id)
     if not paper_info:
@@ -1022,7 +1038,7 @@ def confirm_save_paper(temp_id: str) -> str:
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_STAGE_ANNOTATIONS)
 @track_tool("ra_ingest")
 def refresh_library(
     scope: Literal["global", "project"] = "global",

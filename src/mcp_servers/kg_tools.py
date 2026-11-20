@@ -26,6 +26,19 @@ logger = get_logger(__name__)
 
 mcp = FastMCP("KnowledgeGraphTools")
 
+_KG_READ_ANNOTATIONS = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": False,
+}
+_KG_WRITE_ANNOTATIONS = {
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": False,
+}
+
 CURRENT_SESSION_ID: ContextVar[Optional[str]] = ContextVar("CURRENT_SESSION_ID", default=None)
 
 _store: Optional[KGStore] = None
@@ -60,7 +73,7 @@ _USER_CATEGORY_MAP: dict[str, tuple[str, str, str]] = {
 }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_KG_WRITE_ANNOTATIONS)
 @track_tool("ra_kg")
 def remember_user_fact(
     category: Literal[
@@ -138,7 +151,7 @@ def remember_user_fact(
     return f"{verb}: {triplet.to_line()}"
 
 
-@mcp.tool()
+@mcp.tool(annotations=_KG_WRITE_ANNOTATIONS)
 @track_tool("ra_kg")
 def add_triplet(
     subject: str = USER_CLASS_NAME,
@@ -210,7 +223,7 @@ def add_triplet(
     return f"{verb}: {triplet.to_line()}"
 
 
-@mcp.tool()
+@mcp.tool(annotations=_KG_READ_ANNOTATIONS)
 @track_tool("ra_kg")
 def query_kg(
     subject: Optional[str] = None,
@@ -266,7 +279,7 @@ def query_kg(
     return f"Found {len(results)} fact(s):\n" + "\n".join(t.to_line() for t in results)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_KG_WRITE_ANNOTATIONS)
 @track_tool("ra_kg")
 def update_triplet(
     triplet_id: int,
@@ -303,7 +316,7 @@ def update_triplet(
     return f"Updated fact: {triplet.to_line()}"
 
 
-@mcp.tool()
+@mcp.tool(annotations=_KG_WRITE_ANNOTATIONS)
 @track_tool("ra_kg")
 def retract_triplet(triplet_id: int, reason: str) -> str:
     """
@@ -319,7 +332,7 @@ def retract_triplet(triplet_id: int, reason: str) -> str:
     return f"Retracted fact: {triplet.to_line()}"
 
 
-@mcp.tool()
+@mcp.tool(annotations=_KG_READ_ANNOTATIONS)
 @track_tool("ra_kg")
 def get_user_profile_summary(scope: Literal["all", "global", "project"] = "all") -> str:
     """
@@ -352,7 +365,7 @@ def get_user_profile_summary(scope: Literal["all", "global", "project"] = "all")
     return format_user_profile(profile)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_KG_READ_ANNOTATIONS)
 @track_tool("ra_kg")
 def search_entities(query: str, entity_class: Optional[str] = None, limit: int = 20) -> str:
     """
@@ -370,7 +383,7 @@ def search_entities(query: str, entity_class: Optional[str] = None, limit: int =
     return "\n".join(f"- {e.name} ({e.entity_class})" for e in results)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_KG_READ_ANNOTATIONS)
 @track_tool("ra_kg")
 def get_related_facts(
     entity: str,
@@ -399,7 +412,7 @@ def get_related_facts(
     return f"{len(results)} related fact(s):\n" + "\n".join(t.to_line() for t in results)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_KG_READ_ANNOTATIONS)
 @track_tool("ra_kg")
 def get_ontology() -> str:
     """
@@ -415,7 +428,7 @@ def get_ontology() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_KG_WRITE_ANNOTATIONS)
 @track_tool("ra_kg")
 def extend_ontology(
     kind: Literal["class", "relation"],

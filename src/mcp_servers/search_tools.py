@@ -34,6 +34,13 @@ logger = get_logger(__name__)
 mcp = FastMCP("SearchTools")
 sch = SemanticScholar()
 
+_SEARCH_ANNOTATIONS = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": True,
+}
+
 
 def _s2_headers() -> dict[str, str]:
     headers = {"User-Agent": "ResearchAgent/1.0"}
@@ -101,7 +108,7 @@ def _openalex_search_fallback(query: str, num_results: int) -> Optional[str]:
         return None
 
 
-@mcp.tool()
+@mcp.tool(annotations=_SEARCH_ANNOTATIONS)
 @track_tool("ra_search")
 def duckduckgo_search(query: str, num_results: int = 5) -> str:
     """
@@ -126,7 +133,7 @@ def duckduckgo_search(query: str, num_results: int = 5) -> str:
         return f"Search failed: {e}"
 
 
-@mcp.tool()
+@mcp.tool(annotations=_SEARCH_ANNOTATIONS)
 @track_tool("ra_search")
 def scholar_search(query: str, num_results: int = 5) -> str:
     """
@@ -223,7 +230,7 @@ def _openalex_details_fallback(paper_id_or_doi: str) -> Optional[str]:
         return None
 
 
-@mcp.tool()
+@mcp.tool(annotations=_SEARCH_ANNOTATIONS)
 @track_tool("ra_search")
 def get_paper_details(paper_id_or_doi: str) -> str:
     """
@@ -271,7 +278,7 @@ def get_paper_details(paper_id_or_doi: str) -> str:
         return f"Failed to get paper details: {e}"
 
 
-@mcp.tool()
+@mcp.tool(annotations=_SEARCH_ANNOTATIONS)
 @track_tool("ra_search")
 def get_paper_references(paper_id_or_doi: str, limit: int = 10) -> str:
     """
@@ -290,7 +297,7 @@ def get_paper_references(paper_id_or_doi: str, limit: int = 10) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_SEARCH_ANNOTATIONS)
 @track_tool("ra_search")
 def get_paper_citations(paper_id_or_doi: str, limit: int = 10) -> str:
     """
@@ -309,7 +316,7 @@ def get_paper_citations(paper_id_or_doi: str, limit: int = 10) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_SEARCH_ANNOTATIONS)
 @track_tool("ra_search")
 def read_online_document(
     url_or_arxiv_id: str,
@@ -484,7 +491,7 @@ def read_online_document(
         return f"Failed to read online document: {e}"
 
 
-@mcp.tool()
+@mcp.tool(annotations=_SEARCH_ANNOTATIONS)
 @track_tool("ra_search")
 def walk_citation_graph(start_doi_or_id: str, depth: int = 2) -> str:
     """
@@ -494,7 +501,7 @@ def walk_citation_graph(start_doi_or_id: str, depth: int = 2) -> str:
     return cw_run(start_doi_or_id, depth)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_SEARCH_ANNOTATIONS)
 @track_tool("ra_search")
 def openreview_search(
     query: str,
@@ -565,7 +572,7 @@ def openreview_search(
         return f"OpenReview search failed: {e}"
 
 
-@mcp.tool()
+@mcp.tool(annotations=_SEARCH_ANNOTATIONS)
 @track_tool("ra_search")
 def get_openreview_paper(
     forum_id_or_url: str,
