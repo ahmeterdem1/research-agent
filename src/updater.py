@@ -316,18 +316,24 @@ def _run_homebrew_upgrade(formula: str = HOMEBREW_FORMULA) -> tuple[bool, str]:
 
 
 def _refresh_opencode_integration() -> None:
-    """Refresh `~/.config/opencode/` using the newly installed `ra-cli` binary."""
+    """Refresh all installed harness integrations using the newly installed `ra-cli`."""
+    from src.cli import get_installed_harnesses, install_harnesses
+
+    targets = get_installed_harnesses() or ["opencode"]
     ra_bin = shutil.which("ra-cli")
     if ra_bin:
         try:
-            subprocess.run([ra_bin, "install-opencode", "--no-migrate"], check=False, capture_output=True, text=True)
+            subprocess.run(
+                [ra_bin, "install", "--harness", ",".join(targets), "--no-migrate"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
             return
         except Exception as e:
-            logger.debug("Subprocess `ra-cli install-opencode` failed: %s", e)
+            logger.debug("Subprocess `ra-cli install` failed: %s", e)
 
-    from src.cli import install_opencode
-
-    install_opencode(migrate_repo_data=False)
+    install_harnesses(harnesses=targets, migrate_repo_data=False)
 
 
 def run_upgrade(
@@ -408,6 +414,9 @@ def run_upgrade(
             message=f"Upgrade failed: {msg}",
         )
 
+    from src.cli import get_installed_harnesses
+
+    installed_harnesses = get_installed_harnesses()
     save_install_receipt(
         {
             "version": remote_ver or local_ver,
@@ -415,6 +424,7 @@ def run_upgrade(
             "repo": repo,
             "method": install_method,
             "with_docling": bool(with_docling) if with_docling is not None else currently_has_docling,
+            "harnesses": installed_harnesses,
             "upgraded_at": datetime.now(timezone.utc).isoformat(),
         }
     )
@@ -430,7 +440,7 @@ def run_upgrade(
         remote_sha=remote_sha,
         message=(
             f"Successfully upgraded system-wide installation ({install_method}) "
-            f"from {local_ver} -> {target_ver_label} and refreshed OpenCode templates."
+            f"from {local_ver} -> {target_ver_label} and refreshed installed harness configs."
         ),
     )
 

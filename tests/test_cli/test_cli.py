@@ -542,6 +542,15 @@ def test_install_multi_harness_and_mcp_tool_annotations(monkeypatch, tmp_path, c
             assert other.annotations is not None, f"{other.name} missing MCP annotations"
             assert other.annotations.destructive_hint is False, f"{other.name} should have destructive_hint=False"
 
+    assert cli.get_installed_harnesses() == [
+        "opencode",
+        "gemini-cli",
+        "claude-code",
+        "antigravity",
+        "claude-desktop",
+        "cursor",
+    ]
+
 
 
 

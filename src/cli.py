@@ -493,6 +493,58 @@ def install_cursor(
     }
 
 
+def _harness_detection_specs() -> list[tuple[str, Path, str, str]]:
+    """Return `(harness, config_path, section_key, server_key)` tuples for auto-detection."""
+    home = Path.home()
+    return [
+        ("opencode", _default_opencode_dir() / "opencode.json", "mcp", "ra_docs"),
+        ("gemini-cli", home / ".gemini" / "settings.json", "mcpServers", "ra-docs"),
+        ("claude-code", home / ".claude.json", "mcpServers", "ra_docs"),
+        ("antigravity", home / ".gemini" / "config" / "mcp_config.json", "mcpServers", "ra_docs"),
+        ("claude-desktop", home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json", "mcpServers", "ra_docs"),
+        ("claude-desktop", home / ".config" / "Claude" / "claude_desktop_config.json", "mcpServers", "ra_docs"),
+        ("cursor", home / ".cursor" / "mcp.json", "mcpServers", "ra_docs"),
+    ]
+
+
+def record_installed_harnesses(harness_names: list[str]) -> list[str]:
+    """Persist newly installed harness names into `~/.research-agent/install_receipt.json`."""
+    from src.updater import load_install_receipt, save_install_receipt
+
+    receipt = load_install_receipt() or {}
+    existing = receipt.get("harnesses")
+    recorded = set(existing) if isinstance(existing, list) else set()
+    recorded.update(h for h in harness_names if h in SUPPORTED_HARNESSES)
+    ordered = [h for h in SUPPORTED_HARNESSES if h in recorded]
+    receipt["harnesses"] = ordered
+    save_install_receipt(receipt)
+    return ordered
+
+
+def get_installed_harnesses() -> list[str]:
+    """Return installed harnesses from `install_receipt.json` and on-disk MCP configs."""
+    from src.updater import load_install_receipt
+
+    found: set[str] = set()
+    receipt = load_install_receipt() or {}
+    recorded = receipt.get("harnesses")
+    if isinstance(recorded, list):
+        found.update(h for h in recorded if h in SUPPORTED_HARNESSES)
+
+    for harness, cfg_path, section_key, server_key in _harness_detection_specs():
+        try:
+            if not cfg_path.exists():
+                continue
+            data = _load_json_file(cfg_path)
+        except OSError:
+            continue
+        section = data.get(section_key)
+        if isinstance(section, dict) and server_key in section:
+            found.add(harness)
+
+    return [h for h in SUPPORTED_HARNESSES if h in found]
+
+
 def install_harnesses(
     harnesses: list[str],
     opencode_config_dir: Optional[Path] = None,
@@ -577,6 +629,9 @@ def install_harnesses(
             )
             logger.warning("%s", reason)
             skipped.append((target, reason))
+
+    if installed:
+        record_installed_harnesses([r["harness"] for r in installed if r.get("harness")])
 
     return {"installed": installed, "skipped": skipped}
 
