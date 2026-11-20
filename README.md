@@ -90,6 +90,10 @@ ra-cli install --harness claude-desktop
 ra-cli install --harness cursor
 
 # For any other apps:
+# Print resolved MCP binary paths, HTTP command, sandbox dirs & harness configs
+ra-cli mcp-info
+ra-cli mcp-info --json
+
 # Serves all 4 MCP modules over Streamable HTTP with MCP ToolAnnotations for UI confirmation on save
 ra-cli serve-http --port 8765
 
@@ -142,9 +146,12 @@ Then launch `opencode` (or `opencode web`) in that directory and press `Tab` to 
 
 ---
 
-## Monitoring, Testing & Debugging (`ra-cli status`, `ra-cli stats`, `ra-cli extract`)
+## Monitoring, Testing & Debugging (`ra-cli status`, `ra-cli stats`, `ra-cli mcp-info`, `ra-cli extract`)
 
 ```bash
+# View resolved MCP binary entry points, HTTP endpoint details, sandbox dirs & harness configs
+ra-cli mcp-info
+
 # View Global & Project VTree document counts, KG triplet counts, and active MCP toggles
 ra-cli status
 

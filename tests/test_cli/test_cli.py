@@ -552,6 +552,31 @@ def test_install_multi_harness_and_mcp_tool_annotations(monkeypatch, tmp_path, c
     ]
 
 
+def test_cli_mcp_info_text_and_json(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path / "ra_home")
+    monkeypatch.setattr(settings, "DB_PATH", tmp_path / "ra_home" / "research_agent.db")
+    monkeypatch.setattr(settings, "LIBRARY_ROOT_PATH", str(tmp_path / "papers"))
+
+    rc_text = cli.main(["mcp-info"])
+    assert rc_text == 0
+    out_text = capsys.readouterr().out
+    assert "=== Research Agent MCP & Installation Info ===" in out_text
+    for server in ("ra_docs", "ra_search", "ra_ingest", "ra_kg"):
+        assert server in out_text
+    assert "serve-http --host 127.0.0.1 --port 8765" in out_text
+    assert str(tmp_path / "papers") in out_text
+
+    rc_json = cli.main(["info", "--json"])
+    assert rc_json == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["installation"]["data_dir"] == str(tmp_path / "ra_home")
+    assert payload["installation"]["library_root_path"] == str(tmp_path / "papers")
+    assert [s["name"] for s in payload["mcp_servers"]] == ["ra_docs", "ra_search", "ra_ingest", "ra_kg"]
+    assert payload["http_server"]["default_url"] == "http://127.0.0.1:8765/mcp"
+    assert str(tmp_path / "ra_home") in payload["sandbox_requirements"]["filesystem_read_write"]
+    assert set(payload["harnesses"].keys()) == set(cli.SUPPORTED_HARNESSES)
+
+
 
 
 

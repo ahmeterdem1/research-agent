@@ -104,6 +104,14 @@ The consumer Gemini app (**Customize -> Connectors -> + Custom**) connects to **
 2. If the Gemini consumer app requires a public HTTPS URL rather than `http://127.0.0.1:8765/mcp`, expose it with a private tunnel (e.g., `cloudflared tunnel --url http://127.0.0.1:8765`).
 3. In Gemini, open **Customize -> Connectors -> + Custom**, enter `<url>/mcp`, and connect.
 
+### 3.1c `ra-cli mcp-info` (`info`, `endpoints`)
+Prints essential installation and integration details for configuring any MCP-compatible client (Local Stdio or Streamable HTTP): resolved binary entry points (`ra-mcp-docs`, `ra-mcp-search`, `ra-mcp-ingest`, `ra-mcp-kg`), tool lists and `ToolAnnotations`, unified HTTP server startup command/URL, sandbox filesystem/network requirements, and config paths across all supported AI harnesses:
+
+```bash
+ra-cli mcp-info
+ra-cli info --json
+```
+
 ### 3.2 `ra-cli project`
 Enables or disables Research Agent MCP servers inside a specific project's `opencode.json` (which OpenCode deep-merges over `~/.config/opencode/opencode.json`):
 

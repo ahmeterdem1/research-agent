@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
+import tempfile
 from typing import Optional
 
 sys.path.append(str(Path(__file__).parent.parent))
@@ -778,6 +779,196 @@ def format_status(status: dict) -> str:
     return "\n".join(lines)
 
 
+MCP_SERVER_METADATA: dict[str, dict] = {
+    "ra_docs": {
+        "description": "Search and read local papers and books in the Dual-Scope Virtual Document Tree.",
+        "tools": [
+            "list_tree",
+            "search_library",
+            "list_doc_summaries",
+            "get_dir_summary",
+            "get_document",
+            "get_documents",
+            "get_document_real_path",
+        ],
+        "safety_annotations": "All tools mark readOnlyHint=True, destructiveHint=False.",
+    },
+    "ra_search": {
+        "description": "Search Semantic Scholar, OpenReview, DuckDuckGo, fetch online docs, and walk citation graphs.",
+        "tools": [
+            "duckduckgo_search",
+            "scholar_search",
+            "get_paper_details",
+            "get_paper_references",
+            "get_paper_citations",
+            "read_online_document",
+            "walk_citation_graph",
+            "openreview_search",
+            "get_openreview_paper",
+        ],
+        "safety_annotations": "All tools mark readOnlyHint=True, destructiveHint=False.",
+    },
+    "ra_ingest": {
+        "description": "Stage, save (two-phase confirmation), and incrementally refresh papers in the local library.",
+        "tools": [
+            "stage_paper",
+            "confirm_save_paper",
+            "refresh_library",
+        ],
+        "safety_annotations": (
+            "confirm_save_paper marks readOnlyHint=False, destructiveHint=True; "
+            "stage_paper and refresh_library mark destructiveHint=False."
+        ),
+    },
+    "ra_kg": {
+        "description": "Manage the Dual-Scope Temporal Knowledge Graph and user profile memory.",
+        "tools": [
+            "remember_user_fact",
+            "add_triplet",
+            "query_kg",
+            "update_triplet",
+            "retract_triplet",
+            "get_user_profile_summary",
+            "search_entities",
+            "get_related_facts",
+            "get_ontology",
+            "extend_ontology",
+        ],
+        "safety_annotations": "All tools mark destructiveHint=False.",
+    },
+}
+
+
+def get_mcp_info() -> dict:
+    """Gather resolved MCP entry points, HTTP endpoint details, paths, sandbox requirements, and harness status."""
+    from src.updater import detect_install_method, get_local_version
+
+    ra_cli_path = _resolve_mcp_binary("ra-cli")
+    servers_info = []
+    for name, binary in MCP_SERVERS.items():
+        meta = MCP_SERVER_METADATA.get(name, {})
+        servers_info.append(
+            {
+                "name": name,
+                "binary": binary,
+                "command_path": _resolve_mcp_binary(binary),
+                "description": meta.get("description", ""),
+                "tools": list(meta.get("tools", [])),
+                "safety_annotations": meta.get("safety_annotations", ""),
+            }
+        )
+
+    temp_dir = tempfile.gettempdir()
+    fs_paths = [str(settings.DATA_DIR), temp_dir]
+    if settings.LIBRARY_ROOT_PATH:
+        lib_str = str(settings.LIBRARY_ROOT_PATH)
+        if lib_str not in fs_paths:
+            fs_paths.append(lib_str)
+
+    installed_set = set(get_installed_harnesses())
+    harness_paths: dict[str, list[str]] = {h: [] for h in SUPPORTED_HARNESSES}
+    for h_name, cfg_path, _, _ in _harness_detection_specs():
+        path_str = str(cfg_path)
+        if path_str not in harness_paths[h_name]:
+            harness_paths[h_name].append(path_str)
+
+    harnesses_info = {
+        h_name: {
+            "installed": h_name in installed_set,
+            "config_paths": harness_paths[h_name],
+        }
+        for h_name in SUPPORTED_HARNESSES
+    }
+
+    return {
+        "installation": {
+            "version": get_local_version(),
+            "install_method": detect_install_method(),
+            "python_executable": sys.executable,
+            "ra_cli_path": ra_cli_path,
+            "data_dir": str(settings.DATA_DIR),
+            "env_file": str(settings.DATA_DIR / ".env"),
+            "db_path": str(settings.DB_PATH),
+            "global_vtree_path": str(settings.get_global_vtree_path()),
+            "library_root_path": str(settings.LIBRARY_ROOT_PATH) if settings.LIBRARY_ROOT_PATH else None,
+            "temp_dir": temp_dir,
+        },
+        "mcp_servers": servers_info,
+        "http_server": {
+            "command": f"{ra_cli_path} serve-http --host 127.0.0.1 --port 8765",
+            "default_url": "http://127.0.0.1:8765/mcp",
+            "transport": "streamable-http",
+            "safety_annotations": (
+                "Exposes all 29 tools with MCP ToolAnnotations "
+                "(destructiveHint=True on ra_ingest_confirm_save_paper; destructiveHint=False on all others)."
+            ),
+        },
+        "sandbox_requirements": {
+            "filesystem_read_write": fs_paths,
+            "network_access": (
+                "Required by ra_search (Semantic Scholar, arXiv, OpenReview, DuckDuckGo) "
+                "and ra_ingest (PDF downloads + LLM summarization API)."
+            ),
+        },
+        "harnesses": harnesses_info,
+    }
+
+
+def format_mcp_info(info: dict) -> str:
+    """Format `get_mcp_info()` into a human-readable summary for configuring MCP clients."""
+    inst = info["installation"]
+    http = info["http_server"]
+    sandbox = info["sandbox_requirements"]
+
+    lines = [
+        "=== Research Agent MCP & Installation Info ===",
+        f"Version          : {inst['version']} ({inst['install_method']})",
+        f"ra-cli Binary    : {inst['ra_cli_path']}",
+        f"Python Runtime   : {inst['python_executable']}",
+        f"Global Data Home : {inst['data_dir']}",
+        f"Env Config File  : {inst['env_file']}",
+        f"Knowledge Graph  : {inst['db_path']}",
+        f"Global VTree     : {inst['global_vtree_path']}",
+        f"Library Root     : {inst['library_root_path'] or '(not set — configure PATH_TO_TREE in .env)'}",
+        f"Temp Directory   : {inst['temp_dir']}",
+        "",
+        "Local Stdio MCP Servers:",
+    ]
+    for srv in info["mcp_servers"]:
+        lines.extend(
+            [
+                f"  - {srv['name']} ({srv['binary']})",
+                f"      Command     : {srv['command_path']}",
+                f"      Description : {srv['description']}",
+                f"      Tools       : {', '.join(srv['tools'])}",
+                f"      Annotations : {srv['safety_annotations']}",
+            ]
+        )
+
+    lines.extend(
+        [
+            "",
+            "Unified Streamable HTTP MCP Endpoint (single-URL alternative):",
+            f"  - Start Cmd   : {http['command']}",
+            f"  - Default URL : {http['default_url']} ({http['transport']})",
+            f"  - Annotations : {http['safety_annotations']}",
+            "",
+            "Sandbox & Permission Requirements (for sandboxed GUI clients):",
+            "  - Filesystem (R/W):",
+        ]
+    )
+    for p in sandbox["filesystem_read_write"]:
+        lines.append(f"      * {p}")
+    lines.append(f"  - Network     : {sandbox['network_access']}")
+
+    lines.extend(["", "Harness Config Locations:"])
+    for h_name, h_info in info["harnesses"].items():
+        state = "installed" if h_info["installed"] else "not configured"
+        lines.append(f"  - {h_name:<15} [{state}]: {', '.join(h_info['config_paths'])}")
+
+    return "\n".join(lines)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     from src.updater import DEFAULT_GITHUB_REPO, get_local_version
 
@@ -1134,6 +1325,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         type=str,
         default="/mcp",
         help="Streamable HTTP endpoint path (default: /mcp)",
+    )
+
+    # 12. mcp-info
+    p_info = sub.add_parser(
+        "mcp-info",
+        aliases=["info", "endpoints"],
+        help="Print resolved MCP binary paths, HTTP endpoint command, sandbox directories, and harness config locations",
+    )
+    p_info.add_argument(
+        "--json",
+        action="store_true",
+        help="Output machine-readable JSON instead of human-readable text",
     )
 
     args = parser.parse_args(argv)
@@ -1496,6 +1699,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         hub = create_unified_http_mcp_server()
         hub.run(transport="streamable-http", host=args.host, port=args.port, path=norm_path)
+        return 0
+
+    if args.command in ("mcp-info", "info", "endpoints"):
+        info = get_mcp_info()
+        if args.json:
+            print(json.dumps(info, indent=2))
+        else:
+            print(format_mcp_info(info))
         return 0
 
     return 0
